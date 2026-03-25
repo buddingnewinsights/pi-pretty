@@ -48,7 +48,7 @@ const CACHE_LIMIT = envInt("PRETTY_CACHE_LIMIT", 128);
 // ANSI
 // ---------------------------------------------------------------------------
 
-const RST = "\x1b[0m";
+let RST = "\x1b[0m";
 const BOLD = "\x1b[1m";
 const DIM = "\x1b[2m";
 const ITALIC = "\x1b[3m";
@@ -66,6 +66,31 @@ const FG_ORANGE = "\x1b[38;2;220;140;60m";
 const FG_PURPLE = "\x1b[38;2;170;120;200m";
 
 const BG_STDERR = "\x1b[48;2;40;25;25m";
+
+const BG_DEFAULT = "\x1b[49m";
+let BG_BASE = BG_DEFAULT; // tool box base bg — updated from theme's toolSuccessBg
+
+/** Parse an ANSI 24-bit color escape into { r, g, b }. Handles both fg (38;2) and bg (48;2). */
+function parseAnsiRgb(ansi: string): { r: number; g: number; b: number } | null {
+	const m = ansi.match(/\x1b\[(?:38|48);2;(\d+);(\d+);(\d+)m/);
+	return m ? { r: +m[1], g: +m[2], b: +m[3] } : null;
+}
+
+/** Read toolSuccessBg from the pi theme and update BG_BASE + RST.
+ *  Call once when theme is first available. Idempotent. */
+let _bgBaseResolved = false;
+function resolveBaseBackground(theme: any): void {
+	if (_bgBaseResolved || !theme?.getBgAnsi) return;
+	_bgBaseResolved = true;
+	try {
+		const bgAnsi = theme.getBgAnsi("toolSuccessBg");
+		const parsed = parseAnsiRgb(bgAnsi);
+		if (parsed) {
+			BG_BASE = bgAnsi;
+			RST = `\x1b[0m${BG_BASE}`;
+		}
+	} catch { /* ignore — keep defaults */ }
+}
 
 const ESC_RE = "\u001b";
 const ANSI_RE = new RegExp(`${ESC_RE}\\[[0-9;]*m`, "g");
@@ -722,6 +747,7 @@ export default function piPrettyExtension(pi: any): void {
 		},
 
 		renderCall(args: any, theme: any, ctx: any) {
+			resolveBaseBackground(theme);
 			const fp = args?.path ?? "";
 			const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 			const offset = args?.offset ? ` ${theme.fg("muted", `from line ${args.offset}`)}` : "";
@@ -731,6 +757,7 @@ export default function piPrettyExtension(pi: any): void {
 		},
 
 		renderResult(result: any, _opt: any, theme: any, ctx: any) {
+			resolveBaseBackground(theme);
 			const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 
 			if (ctx.isError) {
@@ -846,6 +873,7 @@ export default function piPrettyExtension(pi: any): void {
 			},
 
 			renderCall(args: any, theme: any, ctx: any) {
+			resolveBaseBackground(theme);
 				const cmd = args?.command ?? "";
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 				const timeout = args?.timeout ? ` ${theme.fg("muted", `(${args.timeout}s timeout)`)}` : "";
@@ -856,6 +884,7 @@ export default function piPrettyExtension(pi: any): void {
 			},
 
 			renderResult(result: any, _opt: any, theme: any, ctx: any) {
+			resolveBaseBackground(theme);
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 
 				if (ctx.isError) {
@@ -936,6 +965,7 @@ export default function piPrettyExtension(pi: any): void {
 			},
 
 			renderCall(args: any, theme: any, ctx: any) {
+			resolveBaseBackground(theme);
 				const fp = args?.path ?? ".";
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 				text.setText(`${theme.fg("toolTitle", theme.bold("ls"))} ${theme.fg("accent", sp(fp))}`);
@@ -943,6 +973,7 @@ export default function piPrettyExtension(pi: any): void {
 			},
 
 			renderResult(result: any, _opt: any, theme: any, ctx: any) {
+			resolveBaseBackground(theme);
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 
 				if (ctx.isError) {
@@ -1002,6 +1033,7 @@ export default function piPrettyExtension(pi: any): void {
 			},
 
 			renderCall(args: any, theme: any, ctx: any) {
+			resolveBaseBackground(theme);
 				const pattern = args?.pattern ?? "";
 				const path = args?.path ? ` ${theme.fg("muted", `in ${sp(args.path)}`)}` : "";
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
@@ -1010,6 +1042,7 @@ export default function piPrettyExtension(pi: any): void {
 			},
 
 			renderResult(result: any, _opt: any, theme: any, ctx: any) {
+			resolveBaseBackground(theme);
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 
 				if (ctx.isError) {
@@ -1074,6 +1107,7 @@ export default function piPrettyExtension(pi: any): void {
 			},
 
 			renderCall(args: any, theme: any, ctx: any) {
+			resolveBaseBackground(theme);
 				const pattern = args?.pattern ?? "";
 				const path = args?.path ? ` ${theme.fg("muted", `in ${sp(args.path)}`)}` : "";
 				const glob = args?.glob ? ` ${theme.fg("muted", `(${args.glob})`)}` : "";
@@ -1083,6 +1117,7 @@ export default function piPrettyExtension(pi: any): void {
 			},
 
 			renderResult(result: any, _opt: any, theme: any, ctx: any) {
+			resolveBaseBackground(theme);
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 
 				if (ctx.isError) {
