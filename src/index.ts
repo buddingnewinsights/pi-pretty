@@ -2,7 +2,7 @@
  * pi-pretty — Pretty terminal output for pi built-in tools.
  *
  * @module pi-pretty
- * @see https://github.com/heyhuynhgiabuu/pi-pretty
+ * @see https://github.com/buddingnewinsights/pi-pretty
  *
  * Enhances:
  *   • read  — syntax-highlighted file content with line numbers

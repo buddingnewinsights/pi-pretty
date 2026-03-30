@@ -6,11 +6,11 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/heyhuynhgiabuu/pi-pretty.git"
+		"url": "git+https://github.com/buddingnewinsights/pi-pretty.git"
 	},
-	"homepage": "https://github.com/heyhuynhgiabuu/pi-pretty#readme",
+	"homepage": "https://github.com/buddingnewinsights/pi-pretty#readme",
 	"bugs": {
-		"url": "https://github.com/heyhuynhgiabuu/pi-pretty/issues"
+		"url": "https://github.com/buddingnewinsights/pi-pretty/issues"
 	},
 	"keywords": [
 		"pi-package",
