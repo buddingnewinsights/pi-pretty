@@ -23,8 +23,8 @@
  *   • Large-file fallback (skip highlighting, still show line numbers)
  */
 
-import { existsSync, statSync } from "node:fs";
-import { basename, dirname, extname, relative } from "node:path";
+import { existsSync, mkdirSync, statSync } from "node:fs";
+import { basename, dirname, extname, join, relative } from "node:path";
 
 import { codeToANSI } from "@shikijs/cli";
 import type { BundledLanguage, BundledTheme } from "shiki";
@@ -670,6 +670,103 @@ async function renderGrepResults(text: string, pattern: string): Promise<string>
 }
 
 // ---------------------------------------------------------------------------
+// FFF integration (optional) — Fast File Finder with frecency & SIMD search
+//
+// If @ff-labs/fff-node is installed, find/grep use FFF for speed + frecency.
+// If not, falls back to wrapping SDK tools (current behavior).
+// ---------------------------------------------------------------------------
+
+class CursorStore {
+	private cursors = new Map<string, any>();
+	private counter = 0;
+
+	store(cursor: any): string {
+		const id = `fff_c${++this.counter}`;
+		this.cursors.set(id, cursor);
+		if (this.cursors.size > 200) {
+			const first = this.cursors.keys().next().value;
+			if (first) this.cursors.delete(first);
+		}
+		return id;
+	}
+
+	get(id: string): any | undefined {
+		return this.cursors.get(id);
+	}
+}
+
+const _cursorStore = new CursorStore();
+let _fffModule: any = null;
+let _fffFinder: any = null;
+let _fffPartialIndex = false;
+let _fffDbDir: string | null = null;
+const FFF_SCAN_TIMEOUT = 15_000;
+
+async function fffEnsureFinder(cwd: string): Promise<any> {
+	if (_fffFinder && !_fffFinder.isDestroyed) return _fffFinder;
+	if (!_fffModule || !_fffDbDir) return null;
+
+	const result = _fffModule.FileFinder.create({
+		basePath: cwd,
+		frecencyDbPath: join(_fffDbDir, "frecency.mdb"),
+		historyDbPath: join(_fffDbDir, "history.mdb"),
+		aiMode: true,
+	});
+
+	if (!result.ok) throw new Error(`FFF init failed: ${result.error}`);
+
+	_fffFinder = result.value;
+	const scan = await _fffFinder.waitForScan(FFF_SCAN_TIMEOUT);
+	_fffPartialIndex = scan.ok && !scan.value;
+
+	return _fffFinder;
+}
+
+function fffDestroy(): void {
+	if (_fffFinder && !_fffFinder.isDestroyed) {
+		_fffFinder.destroy();
+		_fffFinder = null;
+	}
+	_fffPartialIndex = false;
+}
+
+/**
+ * Convert FFF GrepResult items to ripgrep-style "file:line:content" text.
+ * This ensures pi-pretty's renderGrepResults works unchanged.
+ */
+function fffFormatGrepText(items: any[], limit: number): string {
+	const capped = items.slice(0, limit);
+	if (!capped.length) return "No matches found";
+
+	const lines: string[] = [];
+	let currentFile = "";
+
+	for (const match of capped) {
+		if (match.relativePath !== currentFile) {
+			if (currentFile) lines.push("");
+			currentFile = match.relativePath;
+		}
+		if (match.contextBefore?.length) {
+			const startLine = match.lineNumber - match.contextBefore.length;
+			for (let i = 0; i < match.contextBefore.length; i++) {
+				lines.push(`${match.relativePath}-${startLine + i}-${match.contextBefore[i]}`);
+			}
+		}
+		const content =
+			match.lineContent.length > 500 ? `${match.lineContent.slice(0, 500)}...` : match.lineContent;
+		lines.push(`${match.relativePath}:${match.lineNumber}:${content}`);
+		if (match.contextAfter?.length) {
+			const startLine = match.lineNumber + 1;
+			for (let i = 0; i < match.contextAfter.length; i++) {
+				lines.push(`${match.relativePath}-${startLine + i}-${match.contextAfter[i]}`);
+			}
+		}
+	}
+
+	return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
 // Extension entry point
 // ---------------------------------------------------------------------------
 
@@ -681,8 +778,10 @@ export default function piPrettyExtension(pi: any): void {
 	let createGrepTool: any;
 	let TextComponent: any;
 
+	let sdk: any;
+
 	try {
-		const sdk = require("@mariozechner/pi-coding-agent");
+		sdk = require("@mariozechner/pi-coding-agent");
 		createReadTool = sdk.createReadToolDefinition ?? sdk.createReadTool;
 		createBashTool = sdk.createBashToolDefinition ?? sdk.createBashTool;
 		createLsTool = sdk.createLsToolDefinition ?? sdk.createLsTool;
@@ -697,6 +796,58 @@ export default function piPrettyExtension(pi: any): void {
 	const cwd = process.cwd();
 	const home = process.env.HOME ?? "";
 	const sp = (p: string) => shortPath(cwd, home, p);
+
+	// ===================================================================
+	// FFF initialization (optional — graceful fallback to SDK)
+	// ===================================================================
+
+	const getAgentDir = (sdk as any).getAgentDir;
+	try {
+		_fffModule = require("@ff-labs/fff-node");
+		if (getAgentDir) {
+			_fffDbDir = join(getAgentDir(), "fff");
+			try {
+				mkdirSync(_fffDbDir, { recursive: true });
+			} catch {}
+		}
+	} catch {
+		/* FFF not installed — SDK tools will be used */
+	}
+
+	pi.on("session_start", async (_event: any, ctx: any) => {
+		// Try dynamic import if sync require failed (ESM-only package)
+		if (!_fffModule) {
+			try {
+				// @ts-ignore — optional dependency, may not be installed
+				_fffModule = await import("@ff-labs/fff-node");
+			} catch {}
+		}
+		if (!_fffModule) return;
+
+		if (!_fffDbDir) {
+			const agentDir = getAgentDir?.() ?? join(home, ".pi/agent");
+			_fffDbDir = join(agentDir, "fff");
+			try {
+				mkdirSync(_fffDbDir, { recursive: true });
+			} catch {}
+		}
+
+		try {
+			await fffEnsureFinder(ctx.cwd);
+			if (_fffPartialIndex) {
+				ctx.ui?.notify?.("FFF: scan timed out — using partial index. Run /fff-rescan when ready.", "warning");
+			} else {
+				ctx.ui?.setStatus?.("fff", "FFF indexed");
+				setTimeout(() => ctx.ui?.setStatus?.("fff", undefined), 3000);
+			}
+		} catch (e: any) {
+			ctx.ui?.notify?.(`FFF init failed: ${e.message}`, "error");
+		}
+	});
+
+	pi.on("session_shutdown", async () => {
+		fffDestroy();
+	});
 
 	// ===================================================================
 	// read — syntax-highlighted file content
@@ -1013,6 +1164,43 @@ export default function piPrettyExtension(pi: any): void {
 			name: "find",
 
 			async execute(tid: string, params: any, sig: any, upd: any, ctx: any) {
+				// Try FFF first (frecency-ranked, SIMD-accelerated)
+				if (_fffFinder && !_fffFinder.isDestroyed) {
+					try {
+						const effectiveLimit = Math.max(1, params.limit ?? 200);
+						let query = params.pattern ?? "";
+						if (params.path) query = `${params.path} ${query}`;
+
+						const searchResult = _fffFinder.fileSearch(query, { pageSize: effectiveLimit });
+						if (searchResult.ok) {
+							const items = searchResult.value.items.slice(0, effectiveLimit);
+							let textContent = items.map((i: any) => i.relativePath).join("\n");
+							const matchCount = items.length;
+
+							const notices: string[] = [];
+							if (_fffPartialIndex) notices.push("Warning: partial file index");
+							if (items.length >= effectiveLimit) notices.push(`${effectiveLimit} limit reached`);
+							if (searchResult.value.totalMatched > items.length) {
+								notices.push(`${searchResult.value.totalMatched} total matches`);
+							}
+							if (notices.length) textContent += `\n\n[${notices.join(". ")}]`;
+
+							return {
+								content: [{ type: "text", text: textContent }],
+								details: {
+									_type: "findResult",
+									text: textContent,
+									pattern: params.pattern ?? "",
+									matchCount,
+								},
+							};
+						}
+					} catch {
+						/* fall through to SDK */
+					}
+				}
+
+				// SDK fallback
 				const result = await origFind.execute(tid, params, sig, upd, ctx);
 
 				const textContent = result.content
@@ -1082,6 +1270,58 @@ export default function piPrettyExtension(pi: any): void {
 			name: "grep",
 
 			async execute(tid: string, params: any, sig: any, upd: any, ctx: any) {
+				// Try FFF first (SIMD-accelerated, frecency-ranked)
+				if (_fffFinder && !_fffFinder.isDestroyed) {
+					try {
+						const effectiveLimit = Math.max(1, params.limit ?? 100);
+						let query = params.pattern ?? "";
+						if (params.glob) query = `${params.glob} ${query}`;
+						else if (params.path) query = `${params.path} ${query}`;
+
+						const mode = params.literal ? "plain" : "regex";
+
+						const grepResult = _fffFinder.grep(query, {
+							mode,
+							smartCase: !params.ignoreCase,
+							maxMatchesPerFile: Math.min(effectiveLimit, 50),
+							cursor: null,
+							beforeContext: params.context ?? 0,
+							afterContext: params.context ?? 0,
+						});
+
+						if (grepResult.ok) {
+							const result = grepResult.value;
+							let textContent = fffFormatGrepText(result.items, effectiveLimit);
+							const matchCount = Math.min(result.items.length, effectiveLimit);
+
+							const notices: string[] = [];
+							if (_fffPartialIndex) notices.push("Warning: partial file index");
+							if (result.items.length >= effectiveLimit) notices.push(`${effectiveLimit} limit reached`);
+							if ((result as any).regexFallbackError) {
+								notices.push(`Regex failed: ${(result as any).regexFallbackError}, used literal match`);
+							}
+							if (result.nextCursor) {
+								const cursorId = _cursorStore.store(result.nextCursor);
+								notices.push(`More results available. Use cursor="${cursorId}" to continue`);
+							}
+							if (notices.length) textContent += `\n\n[${notices.join(". ")}]`;
+
+							return {
+								content: [{ type: "text", text: textContent }],
+								details: {
+									_type: "grepResult",
+									text: textContent,
+									pattern: params.pattern ?? "",
+									matchCount,
+								},
+							};
+						}
+					} catch {
+						/* fall through to SDK */
+					}
+				}
+
+				// SDK fallback
 				const result = await origGrep.execute(tid, params, sig, upd, ctx);
 
 				const textContent = result.content
@@ -1153,6 +1393,229 @@ export default function piPrettyExtension(pi: any): void {
 				const fallback = result.content?.[0]?.text ?? "searched";
 				text.setText(`  ${theme.fg("dim", String(fallback).slice(0, 120))}`);
 				return text;
+			},
+		});
+	}
+
+	// ===================================================================
+	// multi_grep — FFF-only OR-logic multi-pattern search
+	// ===================================================================
+
+	if (_fffModule) {
+		pi.registerTool({
+			name: "multi_grep",
+			label: "multi_grep (fff)",
+			description: [
+				"Search file contents for lines matching ANY of multiple patterns (OR logic).",
+				"Uses SIMD-accelerated Aho-Corasick multi-pattern matching. Faster than regex alternation.",
+				"Patterns are literal text — never escape special characters.",
+				"Use the constraints parameter for file filtering ('*.rs', 'src/', '!test/').",
+			].join(" "),
+			promptSnippet:
+				"Multi-pattern OR search across file contents (FFF: SIMD-accelerated, frecency-ranked)",
+			promptGuidelines: [
+				"Use multi_grep when you need to find multiple identifiers at once (OR logic).",
+				"Include all naming conventions: snake_case, PascalCase, camelCase variants.",
+				"Patterns are literal text. Never escape special characters.",
+				"Use the constraints parameter for file type/path filtering, not inside patterns.",
+			],
+
+			parameters: {
+				type: "object",
+				properties: {
+					patterns: {
+						type: "array",
+						items: { type: "string" },
+						description: "Patterns to search for (OR logic — matches lines containing ANY pattern).",
+					},
+					constraints: {
+						type: "string",
+						description: "File constraints, e.g. '*.{ts,tsx} !test/' to filter files.",
+					},
+					context: {
+						type: "number",
+						description: "Number of context lines before and after each match (default: 0)",
+					},
+					limit: {
+						type: "number",
+						description: "Maximum number of matches to return (default: 100)",
+					},
+				},
+				required: ["patterns"],
+			},
+
+			async execute(_tid: string, params: any, sig: any, _upd: any, _ctx: any) {
+				if (sig?.aborted) return { content: [{ type: "text", text: "Aborted" }], details: {} };
+
+				if (!params.patterns || params.patterns.length === 0) {
+					return {
+						content: [{ type: "text", text: "Error: patterns array must have at least 1 element" }],
+						details: { error: "empty patterns" },
+					};
+				}
+
+				if (!_fffFinder || _fffFinder.isDestroyed) {
+					return {
+						content: [{ type: "text", text: "FFF not initialized. Wait for session start or run /fff-rescan." }],
+						details: {},
+					};
+				}
+
+				try {
+					const effectiveLimit = Math.max(1, params.limit ?? 100);
+
+					const grepResult = _fffFinder.multiGrep({
+						patterns: params.patterns,
+						constraints: params.constraints,
+						maxMatchesPerFile: Math.min(effectiveLimit, 50),
+						smartCase: true,
+						cursor: null,
+						beforeContext: params.context ?? 0,
+						afterContext: params.context ?? 0,
+					});
+
+					if (!grepResult.ok) {
+						return {
+							content: [{ type: "text", text: `multi_grep error: ${grepResult.error}` }],
+							details: { error: grepResult.error },
+						};
+					}
+
+					const result = grepResult.value;
+					let textContent = fffFormatGrepText(result.items, effectiveLimit);
+					const matchCount = Math.min(result.items.length, effectiveLimit);
+
+					const notices: string[] = [];
+					if (_fffPartialIndex) notices.push("Warning: partial file index");
+					if (result.items.length >= effectiveLimit) notices.push(`${effectiveLimit} limit reached`);
+					if (result.nextCursor) {
+						const cursorId = _cursorStore.store(result.nextCursor);
+						notices.push(`More results: cursor="${cursorId}"`);
+					}
+					if (notices.length) textContent += `\n\n[${notices.join(". ")}]`;
+
+					return {
+						content: [{ type: "text", text: textContent }],
+						details: {
+							_type: "grepResult",
+							text: textContent,
+							pattern: params.patterns.join(" | "),
+							matchCount,
+						},
+					};
+				} catch (e: any) {
+					return {
+						content: [{ type: "text", text: `multi_grep error: ${e.message}` }],
+						details: { error: e.message },
+					};
+				}
+			},
+
+			renderCall(args: any, theme: any, ctx: any) {
+				resolveBaseBackground(theme);
+				const patterns = args?.patterns ?? [];
+				const constraints = args?.constraints;
+				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
+				let content =
+					theme.fg("toolTitle", theme.bold("multi_grep")) +
+					" " +
+					theme.fg("accent", patterns.map((p: string) => `"${p}"`).join(", "));
+				if (constraints) content += theme.fg("muted", ` (${constraints})`);
+				text.setText(content);
+				return text;
+			},
+
+			renderResult(result: any, _opt: any, theme: any, ctx: any) {
+				resolveBaseBackground(theme);
+				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
+
+				if (ctx.isError) {
+					const e = result.content?.[0]?.text ?? "Error";
+					text.setText(`\n${theme.fg("error", e)}`);
+					return text;
+				}
+
+				const d = result.details;
+				if (d?._type === "grepResult" && d.text) {
+					const key = `mgrep:${d.pattern}:${d.matchCount}:${termW()}`;
+					if (ctx.state._mgk !== key) {
+						ctx.state._mgk = key;
+						const info = `${FG_DIM}${d.matchCount} matches${RST}`;
+						ctx.state._mgt = `  ${info}`;
+
+						renderGrepResults(d.text, d.pattern)
+							.then((rendered: string) => {
+								if (ctx.state._mgk !== key) return;
+								ctx.state._mgt = `  ${info}\n${rendered}`;
+								ctx.invalidate();
+							})
+							.catch(() => {});
+					}
+					text.setText(ctx.state._mgt ?? `  ${FG_DIM}${d.matchCount} matches${RST}`);
+					return text;
+				}
+
+				const fallback = result.content?.[0]?.text ?? "searched";
+				text.setText(`  ${theme.fg("dim", String(fallback).slice(0, 120))}`);
+				return text;
+			},
+		});
+	}
+
+	// ===================================================================
+	// FFF commands
+	// ===================================================================
+
+	if (_fffModule) {
+		pi.registerCommand("fff-health", {
+			description: "Show FFF file finder health and indexer status",
+			handler: async (_args: any, ctx: any) => {
+				if (!_fffFinder || _fffFinder.isDestroyed) {
+					ctx.ui?.notify?.("FFF not initialized", "warning");
+					return;
+				}
+
+				const health = _fffFinder.healthCheck();
+				if (!health.ok) {
+					ctx.ui?.notify?.(`Health check failed: ${health.error}`, "error");
+					return;
+				}
+
+				const h = health.value;
+				const lines = [
+					`FFF v${h.version}`,
+					`Git: ${h.git.repositoryFound ? `yes (${h.git.workdir ?? "unknown"})` : "no"}`,
+					`Picker: ${h.filePicker.initialized ? `${h.filePicker.indexedFiles ?? 0} files` : "not initialized"}`,
+					`Frecency: ${h.frecency.initialized ? "active" : "disabled"}`,
+					`Query tracker: ${h.queryTracker.initialized ? "active" : "disabled"}`,
+					`Partial index: ${_fffPartialIndex ? "yes (scan timed out)" : "no"}`,
+				];
+
+				const progress = _fffFinder.getScanProgress();
+				if (progress.ok) {
+					lines.push(`Scanning: ${progress.value.isScanning ? "yes" : "no"} (${progress.value.scannedFilesCount} files)`);
+				}
+
+				ctx.ui?.notify?.(lines.join("\n"), "info");
+			},
+		});
+
+		pi.registerCommand("fff-rescan", {
+			description: "Trigger FFF to rescan files",
+			handler: async (_args: any, ctx: any) => {
+				if (!_fffFinder || _fffFinder.isDestroyed) {
+					ctx.ui?.notify?.("FFF not initialized", "warning");
+					return;
+				}
+
+				const result = _fffFinder.scanFiles();
+				if (!result.ok) {
+					ctx.ui?.notify?.(`Rescan failed: ${result.error}`, "error");
+					return;
+				}
+
+				_fffPartialIndex = false;
+				ctx.ui?.notify?.("FFF rescan triggered", "info");
 			},
 		});
 	}

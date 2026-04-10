@@ -1,6 +1,6 @@
 {
 	"name": "@heyhuynhgiabuu/pi-pretty",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"description": "Pretty terminal output for pi — syntax-highlighted file reads, colored bash output, tree-view directory listings, and more.",
 	"author": "huynhgiabuu",
 	"license": "MIT",
@@ -23,6 +23,9 @@
 	],
 	"dependencies": {
 		"@shikijs/cli": "^4.0.2"
+	},
+	"optionalDependencies": {
+		"@ff-labs/fff-node": "0.5.2"
 	},
 	"peerDependencies": {
 		"@mariozechner/pi-coding-agent": "*",
