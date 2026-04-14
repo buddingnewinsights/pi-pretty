@@ -175,6 +175,9 @@ describe("piPrettyExtension integration", () => {
 
 	function makeDeps(withFFF: boolean, finderOverrides?: Record<string, any>): PiPrettyDeps {
 		const finder = mkFinder(finderOverrides);
+		const fffModule = finderOverrides?.FileFinder
+			? { FileFinder: finderOverrides.FileFinder }
+			: { FileFinder: { create: vi.fn().mockReturnValue({ ok: true, value: finder }) } };
 		return {
 			sdk: {
 				createReadToolDefinition: mockToolFactory(readExec),
@@ -185,9 +188,7 @@ describe("piPrettyExtension integration", () => {
 				getAgentDir: () => "/tmp/pi-pretty-test",
 			},
 			TextComponent: class { private t = ""; setText(v: string) { this.t = v; } getText() { return this.t; } },
-			fffModule: withFFF
-				? { FileFinder: { create: vi.fn().mockReturnValue({ ok: true, value: finder }) } }
-				: undefined,
+			fffModule: withFFF ? fffModule : undefined,
 		};
 	}
 
@@ -445,6 +446,18 @@ describe("piPrettyExtension integration", () => {
 	// ---- session lifecycle ---------------------------------------------
 
 	describe("session lifecycle", () => {
+		it("stores FFF data under a pi-pretty-specific directory", async () => {
+			const create = vi.fn().mockReturnValue({ ok: true, value: mkFinder() });
+			load(true, { FileFinder: { create } });
+			const start = events.get("session_start")!;
+			expect(start, "session_start not registered").toBeDefined();
+			await start({}, { cwd: "/tmp/test" });
+			expect(create).toHaveBeenCalledWith(expect.objectContaining({
+				frecencyDbPath: "/tmp/pi-pretty-test/pi-pretty/fff/frecency.mdb",
+				historyDbPath: "/tmp/pi-pretty-test/pi-pretty/fff/history.mdb",
+			}));
+		});
+
 		it("shutdown → subsequent find falls back to SDK", async () => {
 			await loadWithFFF();
 			await events.get("session_shutdown")!();

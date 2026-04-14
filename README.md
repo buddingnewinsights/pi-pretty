@@ -51,6 +51,16 @@ When running in **tmux**, pi-pretty uses passthrough escape sequences.
 >
 > (or run once in a session: `tmux set -g allow-passthrough on`)
 
+## FFF data directory
+
+When FFF is available, pi-pretty now stores its frecency/history data under a pi-pretty-specific path:
+
+```text
+~/.pi/agent/pi-pretty/fff/
+```
+
+This makes it clear that the cache belongs to this extension rather than Pi core.
+
 ## Configuration
 
 Optional environment variables:

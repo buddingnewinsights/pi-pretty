@@ -16,3 +16,4 @@ pnpm-debug.log*
 !.env.example
 !biome.json
 .DS_Store
+.pi/

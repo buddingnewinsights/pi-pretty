@@ -812,6 +812,10 @@ let _fffPartialIndex = false;
 let _fffDbDir: string | null = null;
 const FFF_SCAN_TIMEOUT = 15_000;
 
+function getPiPrettyFffDir(agentDir: string): string {
+	return join(agentDir, "pi-pretty", "fff");
+}
+
 async function fffEnsureFinder(cwd: string): Promise<any> {
 	if (_fffFinder && !_fffFinder.isDestroyed) return _fffFinder;
 	if (!_fffModule || !_fffDbDir) return null;
@@ -906,7 +910,7 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 		try {
 			_fffModule = require("@ff-labs/fff-node");
 			if (getAgentDir) {
-				_fffDbDir = join(getAgentDir(), "fff");
+				_fffDbDir = getPiPrettyFffDir(getAgentDir());
 				try {
 					mkdirSync(_fffDbDir, { recursive: true });
 				} catch {}
@@ -915,7 +919,7 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 			/* FFF not installed — SDK tools will be used */
 		}
 	} else if (_fffModule && getAgentDir) {
-		_fffDbDir = join(getAgentDir(), "fff");
+		_fffDbDir = getPiPrettyFffDir(getAgentDir());
 		try {
 			mkdirSync(_fffDbDir, { recursive: true });
 		} catch {}
@@ -933,7 +937,7 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 
 		if (!_fffDbDir) {
 			const agentDir = getAgentDir?.() ?? join(home, ".pi/agent");
-			_fffDbDir = join(agentDir, "fff");
+			_fffDbDir = getPiPrettyFffDir(agentDir);
 			try {
 				mkdirSync(_fffDbDir, { recursive: true });
 			} catch {}
