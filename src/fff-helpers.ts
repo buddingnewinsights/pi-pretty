@@ -4,12 +4,14 @@
  * Pure functions and classes used by the FFF integration in index.ts.
  */
 
+import type { GrepCursor, GrepMatch } from "@ff-labs/fff-node";
+
 /**
  * Store for FFF grep pagination cursors.
  * Evicts oldest entry when exceeding maxSize.
  */
 export class CursorStore {
-	private cursors = new Map<string, any>();
+	private cursors = new Map<string, GrepCursor>();
 	private counter = 0;
 	private maxSize: number;
 
@@ -17,7 +19,7 @@ export class CursorStore {
 		this.maxSize = maxSize;
 	}
 
-	store(cursor: any): string {
+	store(cursor: GrepCursor): string {
 		const id = `fff_c${++this.counter}`;
 		this.cursors.set(id, cursor);
 		if (this.cursors.size > this.maxSize) {
@@ -27,7 +29,7 @@ export class CursorStore {
 		return id;
 	}
 
-	get(id: string): any | undefined {
+	get(id: string): GrepCursor | undefined {
 		return this.cursors.get(id);
 	}
 
@@ -40,7 +42,7 @@ export class CursorStore {
  * Convert FFF GrepResult items to ripgrep-style "file:line:content" text.
  * This ensures pi-pretty's renderGrepResults works unchanged.
  */
-export function fffFormatGrepText(items: any[], limit: number): string {
+export function fffFormatGrepText(items: GrepMatch[], limit: number): string {
 	const capped = items.slice(0, limit);
 	if (!capped.length) return "No matches found";
 
@@ -58,8 +60,7 @@ export function fffFormatGrepText(items: any[], limit: number): string {
 				lines.push(`${match.relativePath}-${startLine + i}-${match.contextBefore[i]}`);
 			}
 		}
-		const content =
-			match.lineContent.length > 500 ? `${match.lineContent.slice(0, 500)}...` : match.lineContent;
+		const content = match.lineContent.length > 500 ? `${match.lineContent.slice(0, 500)}...` : match.lineContent;
 		lines.push(`${match.relativePath}:${match.lineNumber}:${content}`);
 		if (match.contextAfter?.length) {
 			const startLine = match.lineNumber + 1;

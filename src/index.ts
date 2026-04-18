@@ -24,9 +24,23 @@
  */
 
 import * as childProcess from "node:child_process";
-import { existsSync, mkdirSync, statSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
 
+import type { FileFinder, FileItem, GrepResult, SearchResult } from "@ff-labs/fff-node";
+import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
+import type {
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	BashToolInput,
+	ExtensionCommandContext,
+	ExtensionContext,
+	FindToolInput,
+	GrepToolInput,
+	LsToolInput,
+	ReadToolInput,
+	ToolRenderResultOptions,
+} from "@mariozechner/pi-coding-agent";
 import { codeToANSI } from "@shikijs/cli";
 import type { BundledLanguage, BundledTheme } from "shiki";
 
@@ -53,8 +67,6 @@ const CACHE_LIMIT = envInt("PRETTY_CACHE_LIMIT", 128);
 
 let RST = "\x1b[0m";
 const BOLD = "\x1b[1m";
-const DIM = "\x1b[2m";
-const ITALIC = "\x1b[3m";
 
 const FG_LNUM = "\x1b[38;2;100;100;100m";
 const FG_DIM = "\x1b[38;2;80;80;80m";
@@ -63,12 +75,7 @@ const FG_GREEN = "\x1b[38;2;100;180;120m";
 const FG_RED = "\x1b[38;2;200;100;100m";
 const FG_YELLOW = "\x1b[38;2;220;180;80m";
 const FG_BLUE = "\x1b[38;2;100;140;220m";
-const FG_CYAN = "\x1b[38;2;80;190;190m";
 const FG_MUTED = "\x1b[38;2;139;148;158m";
-const FG_ORANGE = "\x1b[38;2;220;140;60m";
-const FG_PURPLE = "\x1b[38;2;170;120;200m";
-
-const BG_STDERR = "\x1b[48;2;40;25;25m";
 
 const BG_DEFAULT = "\x1b[49m";
 let BG_BASE = BG_DEFAULT; // tool box success/base bg — updated from theme's toolSuccessBg
@@ -159,8 +166,9 @@ function fillToolBackground(text: string, bg = BG_BASE): string {
 }
 
 function termW(): number {
+	const stderrWithColumns = process.stderr as NodeJS.WriteStream & { columns?: number };
 	const raw =
-		process.stdout.columns || (process.stderr as any).columns || Number.parseInt(process.env.COLUMNS ?? "", 10) || 200;
+		process.stdout.columns || stderrWithColumns.columns || Number.parseInt(process.env.COLUMNS ?? "", 10) || 200;
 	return Math.max(80, Math.min(raw - 4, 210));
 }
 
@@ -456,7 +464,6 @@ const USE_ICONS = ICONS_MODE !== "none" && ICONS_MODE !== "off";
 
 // Nerd Font codepoints + ANSI color per file type
 const NF_DIR = `${FG_BLUE}\ue5ff${RST}`; // folder
-const NF_DIR_OPEN = `${FG_BLUE}\ue5fe${RST}`; // folder open
 const NF_DEFAULT = `${FG_DIM}\uf15b${RST}`; // generic file
 
 const EXT_ICON: Record<string, string> = {
@@ -676,7 +683,7 @@ function renderBashOutput(text: string, exitCode: number | null): { summary: str
 }
 
 /** Render ls output as a tree view with icons. */
-function renderTree(text: string, basePath: string): string {
+function renderTree(text: string, _basePath: string): string {
 	const lines = text.trim().split("\n").filter(Boolean);
 	if (!lines.length) return `${FG_DIM}(empty directory)${RST}`;
 
@@ -719,7 +726,8 @@ function renderFindResults(text: string): string {
 		const dir = dirname(trimmed) || ".";
 		const file = basename(trimmed);
 		if (!groups.has(dir)) groups.set(dir, []);
-		groups.get(dir)!.push(file);
+		const bucket = groups.get(dir);
+		if (bucket) bucket.push(file);
 	}
 
 	const out: string[] = [];
@@ -749,7 +757,6 @@ async function renderGrepResults(text: string, pattern: string): Promise<string>
 	const lines = text.split("\n");
 	if (!lines.length || (lines.length === 1 && !lines[0].trim())) return `${FG_DIM}(no matches)${RST}`;
 
-	const tw = termW();
 	const out: string[] = [];
 	let currentFile = "";
 	let count = 0;
@@ -805,9 +812,131 @@ async function renderGrepResults(text: string, pattern: string): Promise<string>
 // If not, falls back to wrapping SDK tools (current behavior).
 // ---------------------------------------------------------------------------
 
+type ToolTextContent = TextContent;
+type ToolImageContent = ImageContent;
+type ToolContent = TextContent | ImageContent;
+type ToolResultLike<TDetails = unknown> = AgentToolResult<TDetails | undefined>;
+type TextComponentLike = { setText(value: string): void; getText?: () => string };
+type TextComponentCtor = new (text?: string, x?: number, y?: number) => TextComponentLike;
+type ThemeLike = BgTheme & FgTheme & { bold: (text: string) => string };
+type RenderContextLike<TState extends Record<string, string | undefined> = Record<string, string | undefined>> = {
+	lastComponent?: TextComponentLike;
+	state: TState;
+	expanded: boolean;
+	isError: boolean;
+	invalidate: () => void;
+};
+type SessionContextLike = ExtensionContext;
+type CommandContextLike = ExtensionCommandContext;
+type ToolExecutor<TParams, TDetails = unknown> = (
+	toolCallId: string,
+	params: TParams,
+	signal?: AbortSignal,
+	onUpdate?: AgentToolUpdateCallback<TDetails | undefined>,
+	ctx?: ExtensionContext,
+) => Promise<ToolResultLike<TDetails>>;
+type ToolFactory<TParams, TDetails = unknown> = (cwd: string) => {
+	name?: string;
+	description?: string;
+	label?: string;
+	parameters?: unknown;
+	execute: ToolExecutor<TParams, TDetails>;
+};
+type PiPrettySdk = {
+	createReadToolDefinition?: ToolFactory<ReadToolInput>;
+	createReadTool?: ToolFactory<ReadToolInput>;
+	createBashToolDefinition?: ToolFactory<BashToolInput>;
+	createBashTool?: ToolFactory<BashToolInput>;
+	createLsToolDefinition?: ToolFactory<LsToolInput>;
+	createLsTool?: ToolFactory<LsToolInput>;
+	createFindToolDefinition?: ToolFactory<FindToolInput>;
+	createFindTool?: ToolFactory<FindToolInput>;
+	createGrepToolDefinition?: ToolFactory<GrepToolInput>;
+	createGrepTool?: ToolFactory<GrepToolInput>;
+	getAgentDir?: () => string;
+};
+type PiPrettyApi = {
+	registerTool: (tool: unknown) => void;
+	registerCommand: (
+		name: string,
+		command: {
+			description?: string;
+			handler: (args: string, ctx: CommandContextLike) => Promise<void> | void;
+		},
+	) => void;
+	on: (event: string, handler: (event: unknown, ctx: SessionContextLike) => Promise<void> | void) => void;
+};
+type OptionalFffModule = { FileFinder: typeof FileFinder };
+type FffBackedFinder = FileFinder;
+type ReadParams = ReadToolInput;
+type BashParams = BashToolInput;
+type LsParams = LsToolInput;
+type FindParams = FindToolInput;
+type GrepParams = GrepToolInput;
+type MultiGrepParams = {
+	patterns: string[];
+	constraints?: string;
+	context?: number;
+	limit?: number;
+};
+type GrepRenderState = { _gk?: string; _gt?: string };
+type MultiGrepRenderState = { _mgk?: string; _mgt?: string };
+type FindResultDetails = { _type: "findResult"; text: string; pattern: string; matchCount: number };
+type GrepResultDetails = { _type: "grepResult"; text: string; pattern: string; matchCount: number };
+type RenderDetails =
+	| { _type: "readImage"; filePath: string; data: string; mimeType: string }
+	| { _type: "readFile"; filePath: string; content: string; offset: number; lineCount: number }
+	| { _type: "bashResult"; text: string; exitCode: number | null; command: string }
+	| { _type: "lsResult"; text: string; path: string; entryCount: number }
+	| FindResultDetails
+	| GrepResultDetails;
+
+function isTextContent(content: ToolContent): content is ToolTextContent {
+	return content.type === "text";
+}
+
+function isImageContent(content: ToolContent): content is ToolImageContent {
+	return content.type === "image";
+}
+
+function getTextContent(result: ToolResultLike): string {
+	return (
+		result.content
+			?.filter(isTextContent)
+			.map((content) => content.text || "")
+			.join("\n") ?? ""
+	);
+}
+
+function setResultDetails<T>(result: ToolResultLike, details: T): void {
+	result.details = details;
+}
+
+function makeTextResult<TDetails>(text: string, details: TDetails): ToolResultLike<TDetails> {
+	return {
+		content: [{ type: "text", text }],
+		details,
+	};
+}
+
+function appendNotices(text: string, notices: string[]): string {
+	return notices.length ? `${text}\n\n[${notices.join(". ")}]` : text;
+}
+
+function countRipgrepMatches(text: string): number {
+	return text
+		.trim()
+		.split("\n")
+		.filter((line) => /^.+?[:-]\d+[:-]/.test(line)).length;
+}
+
+function getErrorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 const _cursorStore = new CursorStore();
-let _fffModule: any = null;
-let _fffFinder: any = null;
+let _fffModule: OptionalFffModule | null = null;
+let _fffFinder: FffBackedFinder | null = null;
 let _fffPartialIndex = false;
 let _fffDbDir: string | null = null;
 const FFF_SCAN_TIMEOUT = 15_000;
@@ -816,7 +945,7 @@ function getPiPrettyFffDir(agentDir: string): string {
 	return join(agentDir, "pi-pretty", "fff");
 }
 
-async function fffEnsureFinder(cwd: string): Promise<any> {
+async function fffEnsureFinder(cwd: string): Promise<FffBackedFinder | null> {
 	if (_fffFinder && !_fffFinder.isDestroyed) return _fffFinder;
 	if (!_fffModule || !_fffDbDir) return null;
 
@@ -853,20 +982,20 @@ function fffDestroy(): void {
  * In production, omit `deps` — the extension uses require() to load them.
  */
 export interface PiPrettyDeps {
-	sdk: any;
-	TextComponent: any;
-	fffModule?: any;
+	sdk: PiPrettySdk;
+	TextComponent: TextComponentCtor;
+	fffModule?: OptionalFffModule;
 }
 
-export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
-	let createReadTool: any;
-	let createBashTool: any;
-	let createLsTool: any;
-	let createFindTool: any;
-	let createGrepTool: any;
-	let TextComponent: any;
+export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps): void {
+	let createReadTool: ToolFactory<ReadToolInput> | undefined;
+	let createBashTool: ToolFactory<BashToolInput> | undefined;
+	let createLsTool: ToolFactory<LsToolInput> | undefined;
+	let createFindTool: ToolFactory<FindToolInput> | undefined;
+	let createGrepTool: ToolFactory<GrepToolInput> | undefined;
+	let TextComponent: TextComponentCtor;
 
-	let sdk: any;
+	let sdk: PiPrettySdk;
 
 	if (deps) {
 		// Test path: use injected dependencies, reset module state
@@ -904,7 +1033,7 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 	// FFF initialization (optional — graceful fallback to SDK)
 	// ===================================================================
 
-	const getAgentDir = (sdk as any).getAgentDir;
+	const getAgentDir = sdk.getAgentDir;
 	if (!deps) {
 		// Only try require() in production — tests inject fffModule via deps
 		try {
@@ -925,12 +1054,12 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 		} catch {}
 	}
 
-	pi.on("session_start", async (_event: any, ctx: any) => {
+	pi.on("session_start", async (_event, ctx) => {
 		// Try dynamic import if sync require failed (ESM-only package)
 		if (!_fffModule) {
 			try {
-				// @ts-ignore — optional dependency, may not be installed
-				_fffModule = await import("@ff-labs/fff-node");
+				const imported = await import("@ff-labs/fff-node");
+				_fffModule = { FileFinder: imported.FileFinder };
 			} catch {}
 		}
 		if (!_fffModule) return;
@@ -951,8 +1080,8 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 				ctx.ui?.setStatus?.("fff", "FFF indexed");
 				setTimeout(() => ctx.ui?.setStatus?.("fff", undefined), 3000);
 			}
-		} catch (e: any) {
-			ctx.ui?.notify?.(`FFF init failed: ${e.message}`, "error");
+		} catch (error: unknown) {
+			ctx.ui?.notify?.(`FFF init failed: ${getErrorMessage(error)}`, "error");
 		}
 	});
 
@@ -970,69 +1099,68 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 		...origRead,
 		name: "read",
 
-		async execute(tid: string, params: any, sig: any, upd: any, ctx: any) {
-			const result = await origRead.execute(tid, params, sig, upd, ctx);
+		async execute(
+			tid: string,
+			params: ReadParams,
+			sig: AbortSignal | undefined,
+			upd: AgentToolUpdateCallback<unknown> | undefined,
+			ctx: ExtensionContext,
+		) {
+			const result = (await origRead.execute(tid, params, sig, upd, ctx)) as ToolResultLike;
 
 			const fp = params.path ?? "";
 			const offset = params.offset ?? 1;
 
-			// Check for image content
-			const imageBlock = result.content?.find((c: any) => c.type === "image");
+			const imageBlock = result.content?.find(isImageContent);
 			if (imageBlock) {
-				(result as any).details = {
+				setResultDetails(result, {
 					_type: "readImage",
 					filePath: fp,
 					data: imageBlock.data,
 					mimeType: imageBlock.mimeType ?? "image/png",
-				};
+				});
 				return result;
 			}
 
-			// Extract text content for rendering
-			const textContent = result.content
-				?.filter((c: any) => c.type === "text")
-				.map((c: any) => c.text || "")
-				.join("\n");
-
+			const textContent = getTextContent(result);
 			if (textContent && fp) {
 				const lineCount = textContent.split("\n").length;
-				(result as any).details = {
+				setResultDetails(result, {
 					_type: "readFile",
 					filePath: fp,
 					content: textContent,
 					offset,
 					lineCount,
-				};
+				});
 			}
 
 			return result;
 		},
 
-		renderCall(args: any, theme: any, ctx: any) {
+		renderCall(args: ReadParams, theme: ThemeLike, ctx: RenderContextLike) {
 			resolveBaseBackground(theme);
-			const fp = args?.path ?? "";
+			const fp = args.path ?? "";
 			const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
-			const offset = args?.offset ? ` ${theme.fg("muted", `from line ${args.offset}`)}` : "";
-			const limit = args?.limit ? ` ${theme.fg("muted", `(${args.limit} lines)`)}` : "";
-			text.setText(fillToolBackground(`${theme.fg("toolTitle", theme.bold("read"))} ${theme.fg("accent", sp(fp))}${offset}${limit}`));
+			const offset = args.offset ? ` ${theme.fg("muted", `from line ${args.offset}`)}` : "";
+			const limit = args.limit ? ` ${theme.fg("muted", `(${args.limit} lines)`)}` : "";
+			text.setText(
+				fillToolBackground(
+					`${theme.fg("toolTitle", theme.bold("read"))} ${theme.fg("accent", sp(fp))}${offset}${limit}`,
+				),
+			);
 			return text;
 		},
 
-		renderResult(result: any, _opt: any, theme: any, ctx: any) {
+		renderResult(result: ToolResultLike, _opt: unknown, theme: ThemeLike, ctx: RenderContextLike) {
 			resolveBaseBackground(theme);
 			const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 
 			if (ctx.isError) {
-				const e =
-					result.content
-						?.filter((c: any) => c.type === "text")
-						.map((c: any) => c.text || "")
-						.join("\n") ?? "Error";
-				text.setText(renderToolError(e, theme));
+				text.setText(renderToolError(getTextContent(result) || "Error", theme));
 				return text;
 			}
 
-			const d = result.details;
+			const d = result.details as RenderDetails | undefined;
 
 			// Image rendering
 			if (d?._type === "readImage") {
@@ -1052,7 +1180,9 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 					out.push(`  ${FG_YELLOW}${passthroughWarning}${RST}`);
 				} else if (protocol === "kitty") {
 					if (d.mimeType && d.mimeType !== "image/png") {
-						out.push(`  ${FG_YELLOW}Kitty/Ghostty inline preview currently supports PNG payloads (got ${d.mimeType})${RST}`);
+						out.push(
+							`  ${FG_YELLOW}Kitty/Ghostty inline preview currently supports PNG payloads (got ${d.mimeType})${RST}`,
+						);
 					} else {
 						const imgCols = Math.min(tw - 4, 80);
 						out.push(renderKittyImage(d.data, { cols: imgCols }));
@@ -1095,8 +1225,9 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 			}
 
 			// Fallback
-			const fallback = result.content?.[0]?.text ?? "read";
-			text.setText(fillToolBackground(`  ${theme.fg("dim", String(fallback).slice(0, 120))}`));
+			const fallback = result.content?.[0];
+			const fallbackText = fallback && isTextContent(fallback) ? fallback.text : "read";
+			text.setText(fillToolBackground(`  ${theme.fg("dim", String(fallbackText).slice(0, 120))}`));
 			return text;
 		},
 	});
@@ -1112,69 +1243,65 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 			...origBash,
 			name: "bash",
 
-			async execute(tid: string, params: any, sig: any, upd: any, ctx: any) {
-				const result = await origBash.execute(tid, params, sig, upd, ctx);
+			async execute(
+				tid: string,
+				params: BashParams,
+				sig: AbortSignal | undefined,
+				upd: AgentToolUpdateCallback<unknown> | undefined,
+				ctx: ExtensionContext,
+			) {
+				const result = (await origBash.execute(tid, params, sig, upd, ctx)) as ToolResultLike;
+				const textContent = getTextContent(result);
 
-				const textContent = result.content
-					?.filter((c: any) => c.type === "text")
-					.map((c: any) => c.text || "")
-					.join("\n");
-
-				// Try to extract exit code from the output
 				let exitCode: number | null = 0;
 				if (textContent) {
 					const exitMatch = textContent.match(/(?:exit code|exited with|exit status)[:\s]*(\d+)/i);
 					if (exitMatch) exitCode = Number(exitMatch[1]);
-					// Check for common error indicators
 					if (textContent.includes("command not found") || textContent.includes("No such file")) {
 						exitCode = 1;
 					}
 				}
 
-				(result as any).details = {
+				setResultDetails(result, {
 					_type: "bashResult",
 					text: textContent ?? "",
 					exitCode,
 					command: params.command ?? "",
-				};
+				});
 
 				return result;
 			},
 
-			renderCall(args: any, theme: any, ctx: any) {
-			resolveBaseBackground(theme);
-				const cmd = args?.command ?? "";
+			renderCall(args: BashParams, theme: ThemeLike, ctx: RenderContextLike) {
+				resolveBaseBackground(theme);
+				const cmd = args.command ?? "";
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
-				const timeout = args?.timeout ? ` ${theme.fg("muted", `(${args.timeout}s timeout)`)}` : "";
+				const timeout = args.timeout ? ` ${theme.fg("muted", `(${args.timeout}s timeout)`)}` : "";
 				text.setText(
-					fillToolBackground(`${theme.fg("toolTitle", theme.bold("bash"))} ${theme.fg("accent", cmd.length > 80 ? cmd.slice(0, 77) + "…" : cmd)}${timeout}`),
+					fillToolBackground(
+						`${theme.fg("toolTitle", theme.bold("bash"))} ${theme.fg("accent", cmd.length > 80 ? `${cmd.slice(0, 77)}…` : cmd)}${timeout}`,
+					),
 				);
 				return text;
 			},
 
-			renderResult(result: any, _opt: any, theme: any, ctx: any) {
-			resolveBaseBackground(theme);
+			renderResult(result: ToolResultLike, _opt: unknown, theme: ThemeLike, ctx: RenderContextLike) {
+				resolveBaseBackground(theme);
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 
 				if (ctx.isError) {
-					const e =
-						result.content
-							?.filter((c: any) => c.type === "text")
-							.map((c: any) => c.text || "")
-							.join("\n") ?? "Error";
-					text.setText(renderToolError(e, theme));
+					text.setText(renderToolError(getTextContent(result) || "Error", theme));
 					return text;
 				}
 
-				const d = result.details;
+				const d = result.details as RenderDetails | undefined;
 				if (d?._type === "bashResult") {
-					const { summary, body } = renderBashOutput(d.text, d.exitCode);
+					const { summary } = renderBashOutput(d.text, d.exitCode);
 					const lines = d.text.split("\n");
 					const lineCount = lines.length;
 					const lineInfo = lineCount > 1 ? `  ${FG_DIM}(${lineCount} lines)${RST}` : "";
 					const header = `  ${summary}${lineInfo}`;
 
-					// Show output content
 					if (d.text.trim()) {
 						const maxShow = ctx.expanded ? lineCount : MAX_PREVIEW_LINES;
 						const show = lines.slice(0, maxShow);
@@ -1194,8 +1321,9 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 					return text;
 				}
 
-				const fallback = result.content?.[0]?.text ?? "done";
-				text.setText(fillToolBackground(`  ${theme.fg("dim", String(fallback).slice(0, 120))}`));
+				const fallback = result.content?.[0];
+				const fallbackText = fallback && isTextContent(fallback) ? fallback.text : "done";
+				text.setText(fillToolBackground(`  ${theme.fg("dim", String(fallbackText).slice(0, 120))}`));
 				return text;
 			},
 		});
@@ -1212,50 +1340,46 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 			...origLs,
 			name: "ls",
 
-			async execute(tid: string, params: any, sig: any, upd: any, ctx: any) {
-				const result = await origLs.execute(tid, params, sig, upd, ctx);
-
-				const textContent = result.content
-					?.filter((c: any) => c.type === "text")
-					.map((c: any) => c.text || "")
-					.join("\n");
-
+			async execute(
+				tid: string,
+				params: LsParams,
+				sig: AbortSignal | undefined,
+				upd: AgentToolUpdateCallback<unknown> | undefined,
+				ctx: ExtensionContext,
+			) {
+				const result = (await origLs.execute(tid, params, sig, upd, ctx)) as ToolResultLike;
+				const textContent = getTextContent(result);
 				const fp = params.path ?? cwd;
 				const entryCount = textContent ? textContent.trim().split("\n").filter(Boolean).length : 0;
 
-				(result as any).details = {
+				setResultDetails(result, {
 					_type: "lsResult",
 					text: textContent ?? "",
 					path: fp,
 					entryCount,
-				};
+				});
 
 				return result;
 			},
 
-			renderCall(args: any, theme: any, ctx: any) {
-			resolveBaseBackground(theme);
-				const fp = args?.path ?? ".";
+			renderCall(args: LsParams, theme: ThemeLike, ctx: RenderContextLike) {
+				resolveBaseBackground(theme);
+				const fp = args.path ?? ".";
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 				text.setText(fillToolBackground(`${theme.fg("toolTitle", theme.bold("ls"))} ${theme.fg("accent", sp(fp))}`));
 				return text;
 			},
 
-			renderResult(result: any, _opt: any, theme: any, ctx: any) {
-			resolveBaseBackground(theme);
+			renderResult(result: ToolResultLike, _opt: unknown, theme: ThemeLike, ctx: RenderContextLike) {
+				resolveBaseBackground(theme);
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 
 				if (ctx.isError) {
-					const e =
-						result.content
-							?.filter((c: any) => c.type === "text")
-							.map((c: any) => c.text || "")
-							.join("\n") ?? "Error";
-					text.setText(renderToolError(e, theme));
+					text.setText(renderToolError(getTextContent(result) || "Error", theme));
 					return text;
 				}
 
-				const d = result.details;
+				const d = result.details as RenderDetails | undefined;
 				if (d?._type === "lsResult" && d.text) {
 					const tree = renderTree(d.text, d.path);
 					const info = `${FG_DIM}${d.entryCount} entries${RST}`;
@@ -1263,8 +1387,9 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 					return text;
 				}
 
-				const fallback = result.content?.[0]?.text ?? "listed";
-				text.setText(fillToolBackground(`  ${theme.fg("dim", String(fallback).slice(0, 120))}`));
+				const fallback = result.content?.[0];
+				const fallbackText = fallback && isTextContent(fallback) ? fallback.text : "listed";
+				text.setText(fillToolBackground(`  ${theme.fg("dim", String(fallbackText).slice(0, 120))}`));
 				return text;
 			},
 		});
@@ -1281,37 +1406,36 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 			...origFind,
 			name: "find",
 
-			async execute(tid: string, params: any, sig: any, upd: any, ctx: any) {
+			async execute(
+				tid: string,
+				params: FindParams,
+				sig: AbortSignal | undefined,
+				upd: unknown,
+				ctx: ExtensionContext,
+			) {
 				// Try FFF first (frecency-ranked, SIMD-accelerated)
 				if (_fffFinder && !_fffFinder.isDestroyed) {
 					try {
 						const effectiveLimit = Math.max(1, params.limit ?? 200);
-						let query = params.pattern ?? "";
+						let query = params.pattern;
 						if (params.path) query = `${params.path} ${query}`;
 
 						const searchResult = _fffFinder.fileSearch(query, { pageSize: effectiveLimit });
 						if (searchResult.ok) {
-							const items = searchResult.value.items.slice(0, effectiveLimit);
-							let textContent = items.map((i: any) => i.relativePath).join("\n");
-							const matchCount = items.length;
-
+							const search: SearchResult = searchResult.value;
+							const items: FileItem[] = search.items.slice(0, effectiveLimit);
 							const notices: string[] = [];
 							if (_fffPartialIndex) notices.push("Warning: partial file index");
 							if (items.length >= effectiveLimit) notices.push(`${effectiveLimit} limit reached`);
-							if (searchResult.value.totalMatched > items.length) {
-								notices.push(`${searchResult.value.totalMatched} total matches`);
-							}
-							if (notices.length) textContent += `\n\n[${notices.join(". ")}]`;
+							if (search.totalMatched > items.length) notices.push(`${search.totalMatched} total matches`);
 
-							return {
-								content: [{ type: "text", text: textContent }],
-								details: {
-									_type: "findResult",
-									text: textContent,
-									pattern: params.pattern ?? "",
-									matchCount,
-								},
-							};
+							const textContent = appendNotices(items.map((item) => item.relativePath).join("\n"), notices);
+							return makeTextResult<FindResultDetails>(textContent, {
+								_type: "findResult",
+								text: textContent,
+								pattern: params.pattern,
+								matchCount: items.length,
+							});
 						}
 					} catch {
 						/* fall through to SDK */
@@ -1319,45 +1443,42 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 				}
 
 				// SDK fallback
-				const result = await origFind.execute(tid, params, sig, upd, ctx);
-
-				const textContent = result.content
-					?.filter((c: any) => c.type === "text")
-					.map((c: any) => c.text || "")
-					.join("\n");
-
+				const result = await origFind.execute(tid, params, sig, upd as never, ctx);
+				const textContent = getTextContent(result);
 				const matchCount = textContent ? textContent.trim().split("\n").filter(Boolean).length : 0;
 
-				(result as any).details = {
+				setResultDetails<FindResultDetails>(result, {
 					_type: "findResult",
-					text: textContent ?? "",
-					pattern: params.pattern ?? "",
+					text: textContent,
+					pattern: params.pattern,
 					matchCount,
-				};
+				});
 
 				return result;
 			},
 
-			renderCall(args: any, theme: any, ctx: any) {
-			resolveBaseBackground(theme);
-				const pattern = args?.pattern ?? "";
-				const path = args?.path ? ` ${theme.fg("muted", `in ${sp(args.path)}`)}` : "";
+			renderCall(args: FindParams, theme: ThemeLike, ctx: RenderContextLike) {
+				resolveBaseBackground(theme);
+				const pattern = args.pattern ?? "";
+				const path = args.path ? ` ${theme.fg("muted", `in ${sp(args.path)}`)}` : "";
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
-				text.setText(fillToolBackground(`${theme.fg("toolTitle", theme.bold("find"))} ${theme.fg("accent", pattern)}${path}`));
+				text.setText(
+					fillToolBackground(`${theme.fg("toolTitle", theme.bold("find"))} ${theme.fg("accent", pattern)}${path}`),
+				);
 				return text;
 			},
 
-			renderResult(result: any, _opt: any, theme: any, ctx: any) {
-			resolveBaseBackground(theme);
+			renderResult(
+				result: ToolResultLike<FindResultDetails>,
+				_opt: ToolRenderResultOptions,
+				theme: ThemeLike,
+				ctx: RenderContextLike,
+			) {
+				resolveBaseBackground(theme);
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 
 				if (ctx.isError) {
-					const e =
-						result.content
-							?.filter((c: any) => c.type === "text")
-							.map((c: any) => c.text || "")
-							.join("\n") ?? "Error";
-					text.setText(renderToolError(e, theme));
+					text.setText(renderToolError(getTextContent(result) || "Error", theme));
 					return text;
 				}
 
@@ -1369,8 +1490,9 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 					return text;
 				}
 
-				const fallback = result.content?.[0]?.text ?? "found";
-				text.setText(fillToolBackground(`  ${theme.fg("dim", String(fallback).slice(0, 120))}`));
+				const fallback = result.content?.[0];
+				const fallbackText = fallback && isTextContent(fallback) ? fallback.text : "found";
+				text.setText(fillToolBackground(`  ${theme.fg("dim", String(fallbackText).slice(0, 120))}`));
 				return text;
 			},
 		});
@@ -1387,19 +1509,23 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 			...origGrep,
 			name: "grep",
 
-			async execute(tid: string, params: any, sig: any, upd: any, ctx: any) {
+			async execute(
+				tid: string,
+				params: GrepParams,
+				sig: AbortSignal | undefined,
+				upd: unknown,
+				ctx: ExtensionContext,
+			) {
 				// Try FFF first (SIMD-accelerated, frecency-ranked)
 				if (_fffFinder && !_fffFinder.isDestroyed) {
 					try {
 						const effectiveLimit = Math.max(1, params.limit ?? 100);
-						let query = params.pattern ?? "";
+						let query = params.pattern;
 						if (params.glob) query = `${params.glob} ${query}`;
 						else if (params.path) query = `${params.path} ${query}`;
 
-						const mode = params.literal ? "plain" : "regex";
-
 						const grepResult = _fffFinder.grep(query, {
-							mode,
+							mode: params.literal ? "plain" : "regex",
 							smartCase: !params.ignoreCase,
 							maxMatchesPerFile: Math.min(effectiveLimit, 50),
 							cursor: null,
@@ -1408,31 +1534,23 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 						});
 
 						if (grepResult.ok) {
-							const result = grepResult.value;
-							let textContent = fffFormatGrepText(result.items, effectiveLimit);
-							const matchCount = Math.min(result.items.length, effectiveLimit);
-
+							const grep: GrepResult = grepResult.value;
 							const notices: string[] = [];
 							if (_fffPartialIndex) notices.push("Warning: partial file index");
-							if (result.items.length >= effectiveLimit) notices.push(`${effectiveLimit} limit reached`);
-							if ((result as any).regexFallbackError) {
-								notices.push(`Regex failed: ${(result as any).regexFallbackError}, used literal match`);
-							}
-							if (result.nextCursor) {
-								const cursorId = _cursorStore.store(result.nextCursor);
+							if (grep.items.length >= effectiveLimit) notices.push(`${effectiveLimit} limit reached`);
+							if (grep.regexFallbackError) notices.push(`Regex failed: ${grep.regexFallbackError}, used literal match`);
+							if (grep.nextCursor) {
+								const cursorId = _cursorStore.store(grep.nextCursor);
 								notices.push(`More results available. Use cursor="${cursorId}" to continue`);
 							}
-							if (notices.length) textContent += `\n\n[${notices.join(". ")}]`;
 
-							return {
-								content: [{ type: "text", text: textContent }],
-								details: {
-									_type: "grepResult",
-									text: textContent,
-									pattern: params.pattern ?? "",
-									matchCount,
-								},
-							};
+							const textContent = appendNotices(fffFormatGrepText(grep.items, effectiveLimit), notices);
+							return makeTextResult<GrepResultDetails>(textContent, {
+								_type: "grepResult",
+								text: textContent,
+								pattern: params.pattern,
+								matchCount: Math.min(grep.items.length, effectiveLimit),
+							});
 						}
 					} catch {
 						/* fall through to SDK */
@@ -1440,51 +1558,45 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 				}
 
 				// SDK fallback
-				const result = await origGrep.execute(tid, params, sig, upd, ctx);
+				const result = await origGrep.execute(tid, params, sig, upd as never, ctx);
+				const textContent = getTextContent(result);
+				const matchCount = textContent ? countRipgrepMatches(textContent) : 0;
 
-				const textContent = result.content
-					?.filter((c: any) => c.type === "text")
-					.map((c: any) => c.text || "")
-					.join("\n");
-
-				const matchCount = textContent
-					? textContent
-							.trim()
-							.split("\n")
-							.filter((l: string) => l.match(/^.+?[:\-]\d+[:\-]/)).length
-					: 0;
-
-				(result as any).details = {
+				setResultDetails<GrepResultDetails>(result, {
 					_type: "grepResult",
-					text: textContent ?? "",
-					pattern: params.pattern ?? "",
+					text: textContent,
+					pattern: params.pattern,
 					matchCount,
-				};
+				});
 
 				return result;
 			},
 
-			renderCall(args: any, theme: any, ctx: any) {
-			resolveBaseBackground(theme);
-				const pattern = args?.pattern ?? "";
-				const path = args?.path ? ` ${theme.fg("muted", `in ${sp(args.path)}`)}` : "";
-				const glob = args?.glob ? ` ${theme.fg("muted", `(${args.glob})`)}` : "";
+			renderCall(args: GrepParams, theme: ThemeLike, ctx: RenderContextLike) {
+				resolveBaseBackground(theme);
+				const pattern = args.pattern ?? "";
+				const path = args.path ? ` ${theme.fg("muted", `in ${sp(args.path)}`)}` : "";
+				const glob = args.glob ? ` ${theme.fg("muted", `(${args.glob})`)}` : "";
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
-				text.setText(fillToolBackground(`${theme.fg("toolTitle", theme.bold("grep"))} ${theme.fg("accent", pattern)}${path}${glob}`));
+				text.setText(
+					fillToolBackground(
+						`${theme.fg("toolTitle", theme.bold("grep"))} ${theme.fg("accent", pattern)}${path}${glob}`,
+					),
+				);
 				return text;
 			},
 
-			renderResult(result: any, _opt: any, theme: any, ctx: any) {
-			resolveBaseBackground(theme);
+			renderResult(
+				result: ToolResultLike<GrepResultDetails>,
+				_opt: ToolRenderResultOptions,
+				theme: ThemeLike,
+				ctx: RenderContextLike<GrepRenderState>,
+			) {
+				resolveBaseBackground(theme);
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 
 				if (ctx.isError) {
-					const e =
-						result.content
-							?.filter((c: any) => c.type === "text")
-							.map((c: any) => c.text || "")
-							.join("\n") ?? "Error";
-					text.setText(renderToolError(e, theme));
+					text.setText(renderToolError(getTextContent(result) || "Error", theme));
 					return text;
 				}
 
@@ -1508,8 +1620,9 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 					return text;
 				}
 
-				const fallback = result.content?.[0]?.text ?? "searched";
-				text.setText(fillToolBackground(`  ${theme.fg("dim", String(fallback).slice(0, 120))}`));
+				const fallback = result.content?.[0];
+				const fallbackText = fallback && isTextContent(fallback) ? fallback.text : "searched";
+				text.setText(fillToolBackground(`  ${theme.fg("dim", String(fallbackText).slice(0, 120))}`));
 				return text;
 			},
 		});
@@ -1529,8 +1642,7 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 				"Patterns are literal text — never escape special characters.",
 				"Use the constraints parameter for file filtering ('*.rs', 'src/', '!test/').",
 			].join(" "),
-			promptSnippet:
-				"Multi-pattern OR search across file contents (FFF: SIMD-accelerated, frecency-ranked)",
+			promptSnippet: "Multi-pattern OR search across file contents (FFF: SIMD-accelerated, frecency-ranked)",
 			promptGuidelines: [
 				"Use multi_grep when you need to find multiple identifiers at once (OR logic).",
 				"Include all naming conventions: snake_case, PascalCase, camelCase variants.",
@@ -1562,21 +1674,21 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 				required: ["patterns"],
 			},
 
-			async execute(_tid: string, params: any, sig: any, _upd: any, _ctx: any) {
-				if (sig?.aborted) return { content: [{ type: "text", text: "Aborted" }], details: {} };
+			async execute(
+				_tid: string,
+				params: MultiGrepParams,
+				sig: AbortSignal | undefined,
+				_upd: unknown,
+				_ctx: ExtensionContext,
+			) {
+				if (sig?.aborted) return makeTextResult("Aborted", {});
 
 				if (!params.patterns || params.patterns.length === 0) {
-					return {
-						content: [{ type: "text", text: "Error: patterns array must have at least 1 element" }],
-						details: { error: "empty patterns" },
-					};
+					return makeTextResult("Error: patterns array must have at least 1 element", { error: "empty patterns" });
 				}
 
 				if (!_fffFinder || _fffFinder.isDestroyed) {
-					return {
-						content: [{ type: "text", text: "FFF not initialized. Wait for session start or run /fff-rescan." }],
-						details: {},
-					};
+					return makeTextResult("FFF not initialized. Wait for session start or run /fff-rescan.", {});
 				}
 
 				try {
@@ -1593,68 +1705,61 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 					});
 
 					if (!grepResult.ok) {
-						return {
-							content: [{ type: "text", text: `multi_grep error: ${grepResult.error}` }],
-							details: { error: grepResult.error },
-						};
+						return makeTextResult(`multi_grep error: ${grepResult.error}`, { error: grepResult.error });
 					}
 
-					const result = grepResult.value;
-					let textContent = fffFormatGrepText(result.items, effectiveLimit);
-					const matchCount = Math.min(result.items.length, effectiveLimit);
-
+					const grep: GrepResult = grepResult.value;
 					const notices: string[] = [];
 					if (_fffPartialIndex) notices.push("Warning: partial file index");
-					if (result.items.length >= effectiveLimit) notices.push(`${effectiveLimit} limit reached`);
-					if (result.nextCursor) {
-						const cursorId = _cursorStore.store(result.nextCursor);
+					if (grep.items.length >= effectiveLimit) notices.push(`${effectiveLimit} limit reached`);
+					if (grep.nextCursor) {
+						const cursorId = _cursorStore.store(grep.nextCursor);
 						notices.push(`More results: cursor="${cursorId}"`);
 					}
-					if (notices.length) textContent += `\n\n[${notices.join(". ")}]`;
 
-					return {
-						content: [{ type: "text", text: textContent }],
-						details: {
-							_type: "grepResult",
-							text: textContent,
-							pattern: params.patterns.join(" | "),
-							matchCount,
-						},
-					};
-				} catch (e: any) {
-					return {
-						content: [{ type: "text", text: `multi_grep error: ${e.message}` }],
-						details: { error: e.message },
-					};
+					const textContent = appendNotices(fffFormatGrepText(grep.items, effectiveLimit), notices);
+					return makeTextResult<GrepResultDetails>(textContent, {
+						_type: "grepResult",
+						text: textContent,
+						pattern: params.patterns.join(" | "),
+						matchCount: Math.min(grep.items.length, effectiveLimit),
+					});
+				} catch (error: unknown) {
+					const message = getErrorMessage(error);
+					return makeTextResult(`multi_grep error: ${message}`, { error: message });
 				}
 			},
 
-			renderCall(args: any, theme: any, ctx: any) {
+			renderCall(args: MultiGrepParams, theme: ThemeLike, ctx: RenderContextLike) {
 				resolveBaseBackground(theme);
-				const patterns = args?.patterns ?? [];
-				const constraints = args?.constraints;
+				const patterns = args.patterns ?? [];
+				const constraints = args.constraints;
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 				let content =
 					theme.fg("toolTitle", theme.bold("multi_grep")) +
 					" " +
-					theme.fg("accent", patterns.map((p: string) => `"${p}"`).join(", "));
+					theme.fg("accent", patterns.map((p) => `"${p}"`).join(", "));
 				if (constraints) content += theme.fg("muted", ` (${constraints})`);
 				text.setText(content);
 				return text;
 			},
 
-			renderResult(result: any, _opt: any, theme: any, ctx: any) {
+			renderResult(
+				result: ToolResultLike<GrepResultDetails | { error?: string }>,
+				_opt: ToolRenderResultOptions,
+				theme: ThemeLike,
+				ctx: RenderContextLike<MultiGrepRenderState>,
+			) {
 				resolveBaseBackground(theme);
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 
 				if (ctx.isError) {
-					const e = result.content?.[0]?.text ?? "Error";
-					text.setText(`\n${theme.fg("error", e)}`);
+					text.setText(`\n${theme.fg("error", getTextContent(result) || "Error")}`);
 					return text;
 				}
 
 				const d = result.details;
-				if (d?._type === "grepResult" && d.text) {
+				if (d && "_type" in d && d._type === "grepResult" && d.text) {
 					const key = `mgrep:${d.pattern}:${d.matchCount}:${termW()}`;
 					if (ctx.state._mgk !== key) {
 						ctx.state._mgk = key;
@@ -1673,8 +1778,9 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 					return text;
 				}
 
-				const fallback = result.content?.[0]?.text ?? "searched";
-				text.setText(`  ${theme.fg("dim", String(fallback).slice(0, 120))}`);
+				const fallback = result.content?.[0];
+				const fallbackText = fallback && isTextContent(fallback) ? fallback.text : "searched";
+				text.setText(`  ${theme.fg("dim", String(fallbackText).slice(0, 120))}`);
 				return text;
 			},
 		});
@@ -1687,7 +1793,7 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 	if (_fffModule) {
 		pi.registerCommand("fff-health", {
 			description: "Show FFF file finder health and indexer status",
-			handler: async (_args: any, ctx: any) => {
+			handler: async (_args: string, ctx: CommandContextLike) => {
 				if (!_fffFinder || _fffFinder.isDestroyed) {
 					ctx.ui?.notify?.("FFF not initialized", "warning");
 					return;
@@ -1711,7 +1817,9 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 
 				const progress = _fffFinder.getScanProgress();
 				if (progress.ok) {
-					lines.push(`Scanning: ${progress.value.isScanning ? "yes" : "no"} (${progress.value.scannedFilesCount} files)`);
+					lines.push(
+						`Scanning: ${progress.value.isScanning ? "yes" : "no"} (${progress.value.scannedFilesCount} files)`,
+					);
 				}
 
 				ctx.ui?.notify?.(lines.join("\n"), "info");
@@ -1720,7 +1828,7 @@ export default function piPrettyExtension(pi: any, deps?: PiPrettyDeps): void {
 
 		pi.registerCommand("fff-rescan", {
 			description: "Trigger FFF to rescan files",
-			handler: async (_args: any, ctx: any) => {
+			handler: async (_args: string, ctx: CommandContextLike) => {
 				if (!_fffFinder || _fffFinder.isDestroyed) {
 					ctx.ui?.notify?.("FFF not initialized", "warning");
 					return;

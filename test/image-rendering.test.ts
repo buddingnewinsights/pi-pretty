@@ -1,3 +1,5 @@
+import { mkdirSync, rmSync } from "node:fs";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import piPrettyExtension, { __imageInternals } from "../src/index.js";
@@ -63,8 +65,11 @@ function loadReadTool(readExec: any) {
 
 describe("image rendering terminal detection", () => {
 	const envSnapshot = new Map<string, string | undefined>();
+	const agentDir = "/tmp/pi-pretty-test";
 
 	beforeEach(() => {
+		rmSync(agentDir, { recursive: true, force: true });
+		mkdirSync(agentDir, { recursive: true });
 		for (const key of ENV_KEYS) {
 			envSnapshot.set(key, process.env[key]);
 			delete process.env[key];
@@ -73,6 +78,7 @@ describe("image rendering terminal detection", () => {
 	});
 
 	afterEach(() => {
+		rmSync(agentDir, { recursive: true, force: true });
 		for (const key of ENV_KEYS) {
 			const value = envSnapshot.get(key);
 			if (value === undefined) delete process.env[key];
