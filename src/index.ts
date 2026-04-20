@@ -24,7 +24,7 @@
  */
 
 import * as childProcess from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
 
 import type { FileFinder, FileItem, GrepResult, SearchResult } from "@ff-labs/fff-node";
@@ -50,7 +50,40 @@ import { CursorStore, fffFormatGrepText } from "./fff-helpers.js";
 // Config
 // ---------------------------------------------------------------------------
 
-const THEME: BundledTheme = (process.env.PRETTY_THEME as BundledTheme | undefined) ?? "github-dark";
+const DEFAULT_THEME: BundledTheme = "github-dark";
+
+function getDefaultAgentDir(): string | undefined {
+	const home = process.env.HOME ?? "";
+	return home ? join(home, ".pi/agent") : undefined;
+}
+
+function readThemeFromSettings(agentDir?: string): BundledTheme | undefined {
+	const resolvedAgentDir = agentDir ?? getDefaultAgentDir();
+	if (!resolvedAgentDir) return undefined;
+
+	try {
+		const settings = JSON.parse(readFileSync(join(resolvedAgentDir, "settings.json"), "utf8")) as {
+			theme?: unknown;
+		};
+		return typeof settings.theme === "string" ? (settings.theme as BundledTheme) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function resolvePrettyTheme(agentDir?: string): BundledTheme {
+	return (process.env.PRETTY_THEME as BundledTheme | undefined) ?? readThemeFromSettings(agentDir) ?? DEFAULT_THEME;
+}
+
+let THEME: BundledTheme = resolvePrettyTheme();
+
+function setPrettyTheme(agentDir?: string): void {
+	const resolvedTheme = resolvePrettyTheme(agentDir);
+	if (resolvedTheme === THEME) return;
+	THEME = resolvedTheme;
+	_cache.clear();
+	codeToANSI("", "typescript", THEME).catch(() => {});
+}
 
 function envInt(name: string, fallback: number): number {
 	const v = Number.parseInt(process.env[name] ?? "", 10);
@@ -1034,6 +1067,13 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 	// ===================================================================
 
 	const getAgentDir = sdk.getAgentDir;
+	setPrettyTheme((() => {
+		try {
+			return getAgentDir?.() ?? getDefaultAgentDir();
+		} catch {
+			return getDefaultAgentDir();
+		}
+	})());
 	if (!deps) {
 		// Only try require() in production — tests inject fffModule via deps
 		try {
