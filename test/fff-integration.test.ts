@@ -260,9 +260,9 @@ describe("piPrettyExtension integration", () => {
 			expect(tools.has("multi_grep")).toBe(true);
 		});
 
-		it("NO multi_grep when FFF unavailable", () => {
+		it("registers multi_grep when grep SDK available", () => {
 			load(false);
-			expect(tools.has("multi_grep")).toBe(false);
+			expect(tools.has("multi_grep")).toBe(true);
 		});
 
 		it("registers session_start + session_shutdown", () => {
@@ -481,10 +481,11 @@ describe("piPrettyExtension integration", () => {
 			expect(r.content[0].text).toContain("patterns array must have at least 1 element");
 		});
 
-		it("error when FFF not initialized (no session_start)", async () => {
+		it("falls back to SDK when FFF not initialized (no session_start)", async () => {
 			load(true);
 			const r = await tools.get("multi_grep")!.execute("t1", { patterns: ["foo"] }, null, null, null);
-			expect(r.content[0].text).toContain("FFF not initialized");
+			expect(grepExec).toHaveBeenCalledOnce();
+			expect(r.details._type).toBe("grepResult");
 		});
 
 		it("returns multiGrep results", async () => {
@@ -508,13 +509,100 @@ describe("piPrettyExtension integration", () => {
 			expect(r.content[0].text).toContain("compile failed");
 		});
 
-		it("passes constraints and context", async () => {
+		it("passes context to unconstrained FFF multiGrep", async () => {
 			const multiGrep = vi.fn().mockReturnValue({ ok: true, value: { items: [], totalMatched: 0, nextCursor: null } });
 			await loadWithFFF({ multiGrep });
-			await tools.get("multi_grep")!.execute("t1", { patterns: ["a", "b"], constraints: "*.ts", context: 2 }, null, null, null);
+			await tools.get("multi_grep")!.execute("t1", { patterns: ["a", "b"], context: 2 }, null, null, null);
 			expect(multiGrep).toHaveBeenCalledWith(expect.objectContaining({
-				patterns: ["a", "b"], constraints: "*.ts", beforeContext: 2, afterContext: 2,
+				patterns: ["a", "b"], beforeContext: 2, afterContext: 2,
 			}));
+			expect(multiGrep.mock.calls[0][0]).not.toHaveProperty("constraints");
+		});
+
+		it("glob constraints bypass FFF multiGrep and use SDK fallback", async () => {
+			const multiGrep = vi.fn().mockReturnValue({ ok: true, value: { items: [], totalMatched: 0, nextCursor: null } });
+			await loadWithFFF({ multiGrep });
+			await tools.get("multi_grep")!.execute("t1", { patterns: ["a", "b"], constraints: "*.ts", context: 2 }, null, null, {});
+			expect(multiGrep).not.toHaveBeenCalled();
+			expect(grepExec).toHaveBeenCalledWith(
+				"t1",
+				expect.objectContaining({ pattern: "a|b", glob: "*.ts", context: 2 }),
+				null,
+				null,
+				{},
+			);
+		});
+
+		it("path and constraints together bypass FFF multiGrep", async () => {
+			const multiGrep = vi.fn().mockReturnValue({ ok: true, value: { items: [], totalMatched: 0, nextCursor: null } });
+			await loadWithFFF({ multiGrep });
+			await tools.get("multi_grep")!.execute(
+				"t1",
+				{ patterns: ["a", "b"], path: "src", constraints: "*.ts" },
+				null,
+				null,
+				{},
+			);
+			expect(multiGrep).not.toHaveBeenCalled();
+			expect(grepExec).toHaveBeenCalledWith(
+				"t1",
+				expect.objectContaining({ pattern: "a|b", path: "src", glob: "*.ts" }),
+				null,
+				null,
+				{},
+			);
+		});
+
+		it("falls back to SDK when path is provided", async () => {
+			const multiGrep = vi.fn().mockReturnValue({ ok: true, value: { items: [], totalMatched: 0, nextCursor: null } });
+			await loadWithFFF({ multiGrep });
+			await tools.get("multi_grep")!.execute("t1", { patterns: ["foo", "bar"], path: "src" }, null, null, {});
+			expect(multiGrep).not.toHaveBeenCalled();
+			expect(grepExec).toHaveBeenCalledWith(
+				"t1",
+				expect.objectContaining({ pattern: "foo|bar", path: "src", ignoreCase: true }),
+				null,
+				null,
+				{},
+			);
+		});
+
+		it("falls back to SDK when constraints resolve to an existing path", async () => {
+			const multiGrep = vi.fn().mockReturnValue({ ok: true, value: { items: [], totalMatched: 0, nextCursor: null } });
+			await loadWithFFF({ multiGrep });
+			await tools.get("multi_grep")!.execute("t1", { patterns: ["foo", "bar"], constraints: "src" }, null, null, {});
+			expect(multiGrep).not.toHaveBeenCalled();
+			expect(grepExec).toHaveBeenCalledWith(
+				"t1",
+				expect.objectContaining({ pattern: "foo|bar", path: "src" }),
+				null,
+				null,
+				{},
+			);
+		});
+
+		it("maps simple glob constraints into SDK fallback", async () => {
+			await loadWithFFF();
+			await tools.get("multi_grep")!.execute("t1", { patterns: ["foo", "bar"], path: "src", constraints: "*.ts" }, null, null, {});
+			expect(grepExec).toHaveBeenCalledWith(
+				"t1",
+				expect.objectContaining({ pattern: "foo|bar", path: "src", glob: "*.ts" }),
+				null,
+				null,
+				{},
+			);
+		});
+
+		it("uses case-sensitive SDK fallback when any pattern contains uppercase", async () => {
+			await loadWithFFF();
+			await tools.get("multi_grep")!.execute("t1", { patterns: ["foo", "Bar"], path: "src" }, null, null, {});
+			expect(grepExec).toHaveBeenCalledWith(
+				"t1",
+				expect.objectContaining({ pattern: "foo|Bar", ignoreCase: false }),
+				null,
+				null,
+				{},
+			);
 		});
 	});
 
