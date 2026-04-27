@@ -8,9 +8,17 @@
  *    - Graceful degradation (FFF fails → SDK fallback)
  */
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { CursorStore, fffFormatGrepText } from "../src/fff-helpers.js";
 import piPrettyExtension, { type PiPrettyDeps } from "../src/index.js";
+import {
+	getMultiGrepRipgrepArgs,
+	parseMultiGrepConstraints,
+	runMultiGrepRipgrepFallback,
+} from "../src/multi-grep-fallback.js";
 
 // =========================================================================
 // 1. Unit tests — pure functions
@@ -135,6 +143,93 @@ describe("fffFormatGrepText", () => {
 	});
 });
 
+describe("multi_grep constraint parsing", () => {
+	it("maps complex include/exclude constraints to ripgrep globs", () => {
+		expect(parseMultiGrepConstraints("*.{ts,tsx} !test/")).toEqual({
+			ok: true,
+			tokens: ["*.{ts,tsx}", "!test/"],
+			globs: ["*.{ts,tsx}", "!**/test/**"],
+		});
+	});
+
+	it("maps directory constraints as path components", () => {
+		expect(parseMultiGrepConstraints("src/ !src/generated/")).toEqual({
+			ok: true,
+			tokens: ["src/", "!src/generated/"],
+			globs: ["**/src/**", "!**/src/generated/**"],
+		});
+	});
+
+	it("builds literal ripgrep OR arguments with every constraint glob", () => {
+		const result = getMultiGrepRipgrepArgs({
+			cwd: "/repo",
+			patterns: ["foo", "bar"],
+			path: "src",
+			constraints: "*.ts !test/",
+			ignoreCase: true,
+			limit: 100,
+		});
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.args).toEqual([
+			"--line-number",
+			"--with-filename",
+			"--color=never",
+			"--hidden",
+			"--fixed-strings",
+			"--ignore-case",
+			"--glob",
+			"*.ts",
+			"--glob",
+			"!**/test/**",
+			"-e",
+			"foo",
+			"-e",
+			"bar",
+			"--",
+			"src",
+		]);
+	});
+
+	it("ripgrep fallback enforces include/exclude constraints without widening", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-pretty-mgrep-"));
+		try {
+			mkdirSync(join(root, "src", "test"), { recursive: true });
+			mkdirSync(join(root, "test"), { recursive: true });
+			writeFileSync(join(root, "src", "keep.ts"), "needle\n");
+			writeFileSync(join(root, "src", "keep.js"), "needle\n");
+			writeFileSync(join(root, "src", "test", "drop.ts"), "needle\n");
+			writeFileSync(join(root, "test", "drop.ts"), "needle\n");
+
+			const result = await runMultiGrepRipgrepFallback({
+				cwd: root,
+				patterns: ["needle"],
+				constraints: "*.ts !test/",
+				ignoreCase: true,
+				limit: 100,
+			});
+
+			expect(result.text).toContain("src/keep.ts");
+			expect(result.text).not.toContain("src/keep.js");
+			expect(result.text).not.toContain("src/test/drop.ts");
+			expect(result.text).not.toContain("test/drop.ts");
+		} catch (error) {
+			if (String(error).includes("ripgrep (rg) is not available")) return;
+			throw error;
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects unsupported empty negation instead of ignoring it", () => {
+		expect(parseMultiGrepConstraints("*.ts !")).toEqual({
+			ok: false,
+			error: "empty constraint token: !",
+		});
+	});
+});
+
 // =========================================================================
 // 2. Integration tests — via PiPrettyDeps injection
 // =========================================================================
@@ -196,6 +291,7 @@ describe("piPrettyExtension integration", () => {
 	const readExec = vi.fn();
 	const bashExec = vi.fn();
 	const lsExec = vi.fn();
+	const multiGrepRgExec = vi.fn();
 
 	function makeDeps(withFFF: boolean, finderOverrides?: Record<string, any>): PiPrettyDeps {
 		const finder = mkFinder(finderOverrides);
@@ -213,6 +309,7 @@ describe("piPrettyExtension integration", () => {
 			},
 			TextComponent: class { private t = ""; setText(v: string) { this.t = v; } getText() { return this.t; } },
 			fffModule: withFFF ? fffModule : undefined,
+			multiGrepRipgrepFallback: multiGrepRgExec,
 		};
 	}
 
@@ -225,12 +322,13 @@ describe("piPrettyExtension integration", () => {
 			on: vi.fn((e: string, h: Function) => events.set(e, h)),
 		};
 
-		for (const fn of [findExec, grepExec, readExec, bashExec, lsExec]) fn.mockReset();
+		for (const fn of [findExec, grepExec, readExec, bashExec, lsExec, multiGrepRgExec]) fn.mockReset();
 		findExec.mockResolvedValue({ content: [{ type: "text", text: "src/index.ts\nsrc/main.ts" }] });
 		grepExec.mockResolvedValue({ content: [{ type: "text", text: "src/index.ts:10:const x = 1;" }] });
 		readExec.mockResolvedValue({ content: [{ type: "text", text: "content" }] });
 		bashExec.mockResolvedValue({ content: [{ type: "text", text: "output" }] });
 		lsExec.mockResolvedValue({ content: [{ type: "text", text: "f1\nf2" }] });
+		multiGrepRgExec.mockResolvedValue({ text: "src/index.ts:10:const x = 1;", matchCount: 1, limitReached: false });
 	});
 
 	function load(withFFF = false, finderOverrides?: Record<string, any>) {
@@ -519,18 +617,15 @@ describe("piPrettyExtension integration", () => {
 			expect(multiGrep.mock.calls[0][0]).not.toHaveProperty("constraints");
 		});
 
-		it("glob constraints bypass FFF multiGrep and use SDK fallback", async () => {
+		it("glob constraints bypass FFF multiGrep and use ripgrep fallback", async () => {
 			const multiGrep = vi.fn().mockReturnValue({ ok: true, value: { items: [], totalMatched: 0, nextCursor: null } });
 			await loadWithFFF({ multiGrep });
 			await tools.get("multi_grep")!.execute("t1", { patterns: ["a", "b"], constraints: "*.ts", context: 2 }, null, null, {});
 			expect(multiGrep).not.toHaveBeenCalled();
-			expect(grepExec).toHaveBeenCalledWith(
-				"t1",
-				expect.objectContaining({ pattern: "a|b", glob: "*.ts", context: 2 }),
-				null,
-				null,
-				{},
-			);
+			expect(grepExec).not.toHaveBeenCalled();
+			expect(multiGrepRgExec).toHaveBeenCalledWith(expect.objectContaining({
+				patterns: ["a", "b"], constraints: "*.ts", context: 2, ignoreCase: true,
+			}));
 		});
 
 		it("path and constraints together bypass FFF multiGrep", async () => {
@@ -544,13 +639,10 @@ describe("piPrettyExtension integration", () => {
 				{},
 			);
 			expect(multiGrep).not.toHaveBeenCalled();
-			expect(grepExec).toHaveBeenCalledWith(
-				"t1",
-				expect.objectContaining({ pattern: "a|b", path: "src", glob: "*.ts" }),
-				null,
-				null,
-				{},
-			);
+			expect(grepExec).not.toHaveBeenCalled();
+			expect(multiGrepRgExec).toHaveBeenCalledWith(expect.objectContaining({
+				patterns: ["a", "b"], path: "src", constraints: "*.ts",
+			}));
 		});
 
 		it("falls back to SDK when path is provided", async () => {
@@ -567,30 +659,31 @@ describe("piPrettyExtension integration", () => {
 			);
 		});
 
-		it("falls back to SDK when constraints resolve to an existing path", async () => {
+		it("uses path-backed ripgrep fallback for simple path constraints", async () => {
 			const multiGrep = vi.fn().mockReturnValue({ ok: true, value: { items: [], totalMatched: 0, nextCursor: null } });
 			await loadWithFFF({ multiGrep });
 			await tools.get("multi_grep")!.execute("t1", { patterns: ["foo", "bar"], constraints: "src" }, null, null, {});
 			expect(multiGrep).not.toHaveBeenCalled();
-			expect(grepExec).toHaveBeenCalledWith(
-				"t1",
-				expect.objectContaining({ pattern: "foo|bar", path: "src" }),
-				null,
-				null,
-				{},
-			);
+			expect(grepExec).not.toHaveBeenCalled();
+			expect(multiGrepRgExec).toHaveBeenCalledWith(expect.objectContaining({
+				patterns: ["foo", "bar"], path: "src", constraints: undefined,
+			}));
 		});
 
-		it("maps simple glob constraints into SDK fallback", async () => {
+		it("preserves complex constraints in ripgrep fallback", async () => {
 			await loadWithFFF();
-			await tools.get("multi_grep")!.execute("t1", { patterns: ["foo", "bar"], path: "src", constraints: "*.ts" }, null, null, {});
-			expect(grepExec).toHaveBeenCalledWith(
+			const result = await tools.get("multi_grep")!.execute(
 				"t1",
-				expect.objectContaining({ pattern: "foo|bar", path: "src", glob: "*.ts" }),
+				{ patterns: ["foo", "bar"], path: "src", constraints: "*.ts !test/" },
 				null,
 				null,
 				{},
 			);
+			expect(grepExec).not.toHaveBeenCalled();
+			expect(multiGrepRgExec).toHaveBeenCalledWith(expect.objectContaining({
+				patterns: ["foo", "bar"], path: "src", constraints: "*.ts !test/",
+			}));
+			expect(result.content[0].text).not.toContain("ignored unsupported constraints");
 		});
 
 		it("uses case-sensitive SDK fallback when any pattern contains uppercase", async () => {

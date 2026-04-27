@@ -24,7 +24,7 @@
  */
 
 import * as childProcess from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
 
 import type { FileFinder, FileItem, GrepResult, SearchResult } from "@ff-labs/fff-node";
@@ -45,6 +45,7 @@ import { codeToANSI } from "@shikijs/cli";
 import type { BundledLanguage, BundledTheme } from "shiki";
 
 import { CursorStore, fffFormatGrepText } from "./fff-helpers.js";
+import { type MultiGrepRipgrepFallback, runMultiGrepRipgrepFallback } from "./multi-grep-fallback.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -973,21 +974,6 @@ function getErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-function resolveScopedPath(cwd: string, pathValue: string): string {
-	return pathValue.startsWith("/") ? pathValue : join(cwd, pathValue);
-}
-
-function isExistingPath(cwd: string, pathValue: string | undefined): boolean {
-	if (!pathValue) return false;
-
-	try {
-		const resolvedPath = resolveScopedPath(cwd, pathValue);
-		return existsSync(resolvedPath);
-	} catch {
-		return false;
-	}
-}
-
 function trimToUndefined(value: string | undefined): string | undefined {
 	const trimmed = value?.trim();
 	return trimmed ? trimmed : undefined;
@@ -1010,15 +996,10 @@ function shouldIgnoreCaseForPatterns(patterns: string[]): boolean {
 
 function getConstraintBackedPath(constraints: string | undefined): string | undefined {
 	const trimmed = trimToUndefined(constraints);
-	if (!trimmed || /\s/.test(trimmed) || trimmed.includes("!") || /[*?[{]/.test(trimmed)) return undefined;
+	if (!trimmed || /\s/.test(trimmed) || trimmed.includes("!") || trimmed.endsWith("/") || /[*?[{]/.test(trimmed)) {
+		return undefined;
+	}
 	return trimmed;
-}
-
-function getSimpleConstraintGlob(cwd: string, constraints: string | undefined): string | undefined {
-	const trimmed = trimToUndefined(constraints);
-	if (!trimmed || /\s/.test(trimmed) || trimmed.includes("!")) return undefined;
-	if (isExistingPath(cwd, trimmed)) return undefined;
-	return /[*?[{]/.test(trimmed) ? trimmed : undefined;
 }
 
 const _cursorStore = new CursorStore();
@@ -1072,6 +1053,7 @@ export interface PiPrettyDeps {
 	sdk: PiPrettySdk;
 	TextComponent: TextComponentCtor;
 	fffModule?: OptionalFffModule;
+	multiGrepRipgrepFallback?: MultiGrepRipgrepFallback;
 }
 
 export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps): void {
@@ -1115,6 +1097,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 	const cwd = process.cwd();
 	const home = process.env.HOME ?? "";
 	const sp = (p: string) => shortPath(cwd, home, p);
+	const multiGrepRipgrepFallback = deps?.multiGrepRipgrepFallback ?? runMultiGrepRipgrepFallback;
 
 	// ===================================================================
 	// FFF initialization (optional — graceful fallback to SDK)
@@ -1745,7 +1728,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 			description: [
 				"Search file contents for lines matching ANY of multiple patterns (OR logic).",
 				"Uses SIMD-accelerated Aho-Corasick multi-pattern matching when FFF is available.",
-				"Falls back to grep-compatible regex alternation when needed (for example fresh on-disk paths).",
+				"Falls back to ripgrep while preserving literal OR semantics and file constraints when needed.",
 				"Patterns are literal text — never escape special characters.",
 				"Use path to scope a directory/file and constraints for file filtering ('*.rs', 'src/', '!test/').",
 			].join(" "),
@@ -1842,32 +1825,53 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 					}
 				}
 
-				if (!multiGrepFallback) {
-					if (!_fffFinder || _fffFinder.isDestroyed) {
-						return makeTextResult("FFF not initialized. Wait for session start or run /fff-rescan.", {});
+				if (requestedConstraints || !multiGrepFallback) {
+					try {
+						const pathBackedConstraint = Boolean(
+							requestedConstraints && !requestedPath && requestedConstraints === effectivePath,
+						);
+						const constraintsForRipgrep = pathBackedConstraint ? undefined : requestedConstraints;
+						const notices: string[] = [];
+
+						if (!_fffFinder || _fffFinder.isDestroyed) notices.push("FFF unavailable, used ripgrep fallback");
+						else if (hasNativeConstraints) notices.push("Used ripgrep fallback for constrained search");
+						else notices.push("Used ripgrep fallback");
+
+						const rgResult = await multiGrepRipgrepFallback({
+							cwd,
+							patterns: params.patterns,
+							path: effectivePath,
+							constraints: constraintsForRipgrep,
+							ignoreCase: shouldIgnoreCaseForPatterns(params.patterns),
+							context: params.context,
+							limit: effectiveLimit,
+							signal: sig,
+						});
+						const textContent = normalizeLineEndings(rgResult.text) || "No matches found";
+						if (rgResult.limitReached) notices.push(`${effectiveLimit} limit reached`);
+						const finalText = appendNotices(textContent, notices);
+
+						return makeTextResult<GrepResultDetails>(finalText, {
+							_type: "grepResult",
+							text: finalText,
+							pattern,
+							matchCount: rgResult.matchCount,
+						});
+					} catch (error: unknown) {
+						const message = getErrorMessage(error);
+						return makeTextResult(`multi_grep error: ${message}`, { error: message });
 					}
-					return makeTextResult("multi_grep error: FFF search failed and no grep fallback is available", {
-						error: "missing grep fallback",
-					});
 				}
 
 				try {
-					const simpleGlob = getSimpleConstraintGlob(cwd, params.constraints);
 					const notices: string[] = [];
-					const trimmedConstraints = trimToUndefined(params.constraints);
-
 					if (!_fffFinder || _fffFinder.isDestroyed) notices.push("FFF unavailable, used SDK grep fallback");
-					else if (hasNativeConstraints) notices.push("Used SDK grep fallback for constrained search");
-					if (trimmedConstraints && !simpleGlob && trimmedConstraints !== effectivePath) {
-						notices.push(`SDK fallback ignored unsupported constraints: ${trimmedConstraints}`);
-					}
 
 					const result = await multiGrepFallback.execute(
 						tid,
 						{
 							pattern,
 							path: effectivePath,
-							glob: simpleGlob,
 							ignoreCase: shouldIgnoreCaseForPatterns(params.patterns),
 							context: params.context,
 							limit: params.limit,
