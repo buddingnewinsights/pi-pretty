@@ -8,9 +8,17 @@
  *    - Graceful degradation (FFF fails → SDK fallback)
  */
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { CursorStore, fffFormatGrepText } from "../src/fff-helpers.js";
 import piPrettyExtension, { type PiPrettyDeps } from "../src/index.js";
+import {
+	getMultiGrepRipgrepArgs,
+	parseMultiGrepConstraints,
+	runMultiGrepRipgrepFallback,
+} from "../src/multi-grep-fallback.js";
 
 // =========================================================================
 // 1. Unit tests — pure functions
@@ -109,6 +117,117 @@ describe("fffFormatGrepText", () => {
 		expect(lines[0]).toBe("a.ts:5:match");
 		expect(lines[1]).toBe("a.ts-6-after1");
 	});
+
+	it("sanitizes CRLF and CR without injecting grep record newlines", () => {
+		const items = [{
+			relativePath: "a.ts",
+			lineNumber: 5,
+			lineContent: "match\r\ncontinued\rtrail",
+			contextBefore: ["before\r\nline"],
+			contextAfter: ["after\rline"],
+		}];
+		const text = fffFormatGrepText(items, 100);
+		const lines = text.split("\n");
+
+		expect(lines).toEqual([
+			"a.ts-4-before\\nline",
+			"a.ts:5:match\\ncontinued\\rtrail",
+			"a.ts-6-after\\rline",
+		]);
+		expect(lines).toHaveLength(3);
+	});
+
+	it("strips trailing CR from CRLF-backed FFF records", () => {
+		const items = [{ relativePath: "a.ts", lineNumber: 5, lineContent: "match\r" }];
+		expect(fffFormatGrepText(items, 100)).toBe("a.ts:5:match");
+	});
+});
+
+describe("multi_grep constraint parsing", () => {
+	it("maps complex include/exclude constraints to ripgrep globs", () => {
+		expect(parseMultiGrepConstraints("*.{ts,tsx} !test/")).toEqual({
+			ok: true,
+			tokens: ["*.{ts,tsx}", "!test/"],
+			globs: ["*.{ts,tsx}", "!**/test/**"],
+		});
+	});
+
+	it("maps directory constraints as path components", () => {
+		expect(parseMultiGrepConstraints("src/ !src/generated/")).toEqual({
+			ok: true,
+			tokens: ["src/", "!src/generated/"],
+			globs: ["**/src/**", "!**/src/generated/**"],
+		});
+	});
+
+	it("builds literal ripgrep OR arguments with every constraint glob", () => {
+		const result = getMultiGrepRipgrepArgs({
+			cwd: "/repo",
+			patterns: ["foo", "bar"],
+			path: "src",
+			constraints: "*.ts !test/",
+			ignoreCase: true,
+			limit: 100,
+		});
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.args).toEqual([
+			"--line-number",
+			"--with-filename",
+			"--color=never",
+			"--hidden",
+			"--fixed-strings",
+			"--ignore-case",
+			"--glob",
+			"*.ts",
+			"--glob",
+			"!**/test/**",
+			"-e",
+			"foo",
+			"-e",
+			"bar",
+			"--",
+			"src",
+		]);
+	});
+
+	it("ripgrep fallback enforces include/exclude constraints without widening", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-pretty-mgrep-"));
+		try {
+			mkdirSync(join(root, "src", "test"), { recursive: true });
+			mkdirSync(join(root, "test"), { recursive: true });
+			writeFileSync(join(root, "src", "keep.ts"), "needle\n");
+			writeFileSync(join(root, "src", "keep.js"), "needle\n");
+			writeFileSync(join(root, "src", "test", "drop.ts"), "needle\n");
+			writeFileSync(join(root, "test", "drop.ts"), "needle\n");
+
+			const result = await runMultiGrepRipgrepFallback({
+				cwd: root,
+				patterns: ["needle"],
+				constraints: "*.ts !test/",
+				ignoreCase: true,
+				limit: 100,
+			});
+
+			expect(result.text).toContain("src/keep.ts");
+			expect(result.text).not.toContain("src/keep.js");
+			expect(result.text).not.toContain("src/test/drop.ts");
+			expect(result.text).not.toContain("test/drop.ts");
+		} catch (error) {
+			if (String(error).includes("ripgrep (rg) is not available")) return;
+			throw error;
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects unsupported empty negation instead of ignoring it", () => {
+		expect(parseMultiGrepConstraints("*.ts !")).toEqual({
+			ok: false,
+			error: "empty constraint token: !",
+		});
+	});
 });
 
 // =========================================================================
@@ -172,6 +291,7 @@ describe("piPrettyExtension integration", () => {
 	const readExec = vi.fn();
 	const bashExec = vi.fn();
 	const lsExec = vi.fn();
+	const multiGrepRgExec = vi.fn();
 
 	function makeDeps(withFFF: boolean, finderOverrides?: Record<string, any>): PiPrettyDeps {
 		const finder = mkFinder(finderOverrides);
@@ -189,6 +309,7 @@ describe("piPrettyExtension integration", () => {
 			},
 			TextComponent: class { private t = ""; setText(v: string) { this.t = v; } getText() { return this.t; } },
 			fffModule: withFFF ? fffModule : undefined,
+			multiGrepRipgrepFallback: multiGrepRgExec,
 		};
 	}
 
@@ -201,12 +322,13 @@ describe("piPrettyExtension integration", () => {
 			on: vi.fn((e: string, h: Function) => events.set(e, h)),
 		};
 
-		for (const fn of [findExec, grepExec, readExec, bashExec, lsExec]) fn.mockReset();
+		for (const fn of [findExec, grepExec, readExec, bashExec, lsExec, multiGrepRgExec]) fn.mockReset();
 		findExec.mockResolvedValue({ content: [{ type: "text", text: "src/index.ts\nsrc/main.ts" }] });
 		grepExec.mockResolvedValue({ content: [{ type: "text", text: "src/index.ts:10:const x = 1;" }] });
 		readExec.mockResolvedValue({ content: [{ type: "text", text: "content" }] });
 		bashExec.mockResolvedValue({ content: [{ type: "text", text: "output" }] });
 		lsExec.mockResolvedValue({ content: [{ type: "text", text: "f1\nf2" }] });
+		multiGrepRgExec.mockResolvedValue({ text: "src/index.ts:10:const x = 1;", matchCount: 1, limitReached: false });
 	});
 
 	function load(withFFF = false, finderOverrides?: Record<string, any>) {
@@ -236,9 +358,9 @@ describe("piPrettyExtension integration", () => {
 			expect(tools.has("multi_grep")).toBe(true);
 		});
 
-		it("NO multi_grep when FFF unavailable", () => {
+		it("registers multi_grep when grep SDK available", () => {
 			load(false);
-			expect(tools.has("multi_grep")).toBe(false);
+			expect(tools.has("multi_grep")).toBe(true);
 		});
 
 		it("registers session_start + session_shutdown", () => {
@@ -284,6 +406,32 @@ describe("piPrettyExtension integration", () => {
 			load(false);
 			const r = await tools.get("grep")!.execute("t1", { pattern: "TODO" }, null, null, {});
 			expect(r.details.matchCount).toBe(3);
+		});
+
+		it("normalizes CRLF in SDK text results", async () => {
+			grepExec.mockResolvedValue({
+				content: [{ type: "text", text: "a.ts:1:TODO\r\na.ts:5:TODO\rb.ts:10:TODO" }],
+			});
+			load(false);
+			const r = await tools.get("grep")!.execute("t1", { pattern: "TODO" }, null, null, {});
+			expect(r.content[0].text).toBe("a.ts:1:TODO\na.ts:5:TODO\nb.ts:10:TODO");
+			expect(r.details.text).toBe("a.ts:1:TODO\na.ts:5:TODO\nb.ts:10:TODO");
+			expect(r.details.matchCount).toBe(3);
+		});
+	});
+
+	// ---- read -----------------------------------------------------------
+
+	describe("read", () => {
+		it("normalizes CRLF in read details content", async () => {
+			readExec.mockResolvedValue({
+				content: [{ type: "text", text: "line1\r\nline2\rline3" }],
+			});
+			load(false);
+			const r = await tools.get("read")!.execute("t1", { path: "file.txt" }, null, null, {});
+			expect(r.details._type).toBe("readFile");
+			expect(r.details.content).toBe("line1\nline2\nline3");
+			expect(r.details.lineCount).toBe(3);
 		});
 	});
 
@@ -356,6 +504,22 @@ describe("piPrettyExtension integration", () => {
 			expect(r.content[0].text).toContain("src/index.ts:42:const x = 1;");
 		});
 
+		it("sanitizes CRLF in FFF grep output without extra records", async () => {
+			await loadWithFFF({
+				grep: vi.fn().mockReturnValue({
+					ok: true,
+					value: {
+						items: [{ relativePath: "src/index.ts", lineNumber: 42, lineContent: "const x = 1;\r\nconst y = 2;" }],
+						totalMatched: 1,
+						nextCursor: null,
+					},
+				}),
+			});
+			const r = await tools.get("grep")!.execute("t1", { pattern: "const" }, null, null, {});
+			expect(r.content[0].text).toBe("src/index.ts:42:const x = 1;\\nconst y = 2;");
+			expect(r.details.text.split("\n")).toHaveLength(1);
+		});
+
 		it("literal=true → mode=plain", async () => {
 			const grep = vi.fn().mockReturnValue({ ok: true, value: { items: [], totalMatched: 0, nextCursor: null } });
 			await loadWithFFF({ grep });
@@ -415,10 +579,11 @@ describe("piPrettyExtension integration", () => {
 			expect(r.content[0].text).toContain("patterns array must have at least 1 element");
 		});
 
-		it("error when FFF not initialized (no session_start)", async () => {
+		it("falls back to SDK when FFF not initialized (no session_start)", async () => {
 			load(true);
 			const r = await tools.get("multi_grep")!.execute("t1", { patterns: ["foo"] }, null, null, null);
-			expect(r.content[0].text).toContain("FFF not initialized");
+			expect(grepExec).toHaveBeenCalledOnce();
+			expect(r.details._type).toBe("grepResult");
 		});
 
 		it("returns multiGrep results", async () => {
@@ -442,13 +607,95 @@ describe("piPrettyExtension integration", () => {
 			expect(r.content[0].text).toContain("compile failed");
 		});
 
-		it("passes constraints and context", async () => {
+		it("passes context to unconstrained FFF multiGrep", async () => {
 			const multiGrep = vi.fn().mockReturnValue({ ok: true, value: { items: [], totalMatched: 0, nextCursor: null } });
 			await loadWithFFF({ multiGrep });
-			await tools.get("multi_grep")!.execute("t1", { patterns: ["a", "b"], constraints: "*.ts", context: 2 }, null, null, null);
+			await tools.get("multi_grep")!.execute("t1", { patterns: ["a", "b"], context: 2 }, null, null, null);
 			expect(multiGrep).toHaveBeenCalledWith(expect.objectContaining({
-				patterns: ["a", "b"], constraints: "*.ts", beforeContext: 2, afterContext: 2,
+				patterns: ["a", "b"], beforeContext: 2, afterContext: 2,
 			}));
+			expect(multiGrep.mock.calls[0][0]).not.toHaveProperty("constraints");
+		});
+
+		it("glob constraints bypass FFF multiGrep and use ripgrep fallback", async () => {
+			const multiGrep = vi.fn().mockReturnValue({ ok: true, value: { items: [], totalMatched: 0, nextCursor: null } });
+			await loadWithFFF({ multiGrep });
+			await tools.get("multi_grep")!.execute("t1", { patterns: ["a", "b"], constraints: "*.ts", context: 2 }, null, null, {});
+			expect(multiGrep).not.toHaveBeenCalled();
+			expect(grepExec).not.toHaveBeenCalled();
+			expect(multiGrepRgExec).toHaveBeenCalledWith(expect.objectContaining({
+				patterns: ["a", "b"], constraints: "*.ts", context: 2, ignoreCase: true,
+			}));
+		});
+
+		it("path and constraints together bypass FFF multiGrep", async () => {
+			const multiGrep = vi.fn().mockReturnValue({ ok: true, value: { items: [], totalMatched: 0, nextCursor: null } });
+			await loadWithFFF({ multiGrep });
+			await tools.get("multi_grep")!.execute(
+				"t1",
+				{ patterns: ["a", "b"], path: "src", constraints: "*.ts" },
+				null,
+				null,
+				{},
+			);
+			expect(multiGrep).not.toHaveBeenCalled();
+			expect(grepExec).not.toHaveBeenCalled();
+			expect(multiGrepRgExec).toHaveBeenCalledWith(expect.objectContaining({
+				patterns: ["a", "b"], path: "src", constraints: "*.ts",
+			}));
+		});
+
+		it("falls back to SDK when path is provided", async () => {
+			const multiGrep = vi.fn().mockReturnValue({ ok: true, value: { items: [], totalMatched: 0, nextCursor: null } });
+			await loadWithFFF({ multiGrep });
+			await tools.get("multi_grep")!.execute("t1", { patterns: ["foo", "bar"], path: "src" }, null, null, {});
+			expect(multiGrep).not.toHaveBeenCalled();
+			expect(grepExec).toHaveBeenCalledWith(
+				"t1",
+				expect.objectContaining({ pattern: "foo|bar", path: "src", ignoreCase: true }),
+				null,
+				null,
+				{},
+			);
+		});
+
+		it("uses path-backed ripgrep fallback for simple path constraints", async () => {
+			const multiGrep = vi.fn().mockReturnValue({ ok: true, value: { items: [], totalMatched: 0, nextCursor: null } });
+			await loadWithFFF({ multiGrep });
+			await tools.get("multi_grep")!.execute("t1", { patterns: ["foo", "bar"], constraints: "src" }, null, null, {});
+			expect(multiGrep).not.toHaveBeenCalled();
+			expect(grepExec).not.toHaveBeenCalled();
+			expect(multiGrepRgExec).toHaveBeenCalledWith(expect.objectContaining({
+				patterns: ["foo", "bar"], path: "src", constraints: undefined,
+			}));
+		});
+
+		it("preserves complex constraints in ripgrep fallback", async () => {
+			await loadWithFFF();
+			const result = await tools.get("multi_grep")!.execute(
+				"t1",
+				{ patterns: ["foo", "bar"], path: "src", constraints: "*.ts !test/" },
+				null,
+				null,
+				{},
+			);
+			expect(grepExec).not.toHaveBeenCalled();
+			expect(multiGrepRgExec).toHaveBeenCalledWith(expect.objectContaining({
+				patterns: ["foo", "bar"], path: "src", constraints: "*.ts !test/",
+			}));
+			expect(result.content[0].text).not.toContain("ignored unsupported constraints");
+		});
+
+		it("uses case-sensitive SDK fallback when any pattern contains uppercase", async () => {
+			await loadWithFFF();
+			await tools.get("multi_grep")!.execute("t1", { patterns: ["foo", "Bar"], path: "src" }, null, null, {});
+			expect(grepExec).toHaveBeenCalledWith(
+				"t1",
+				expect.objectContaining({ pattern: "foo|Bar", ignoreCase: false }),
+				null,
+				null,
+				{},
+			);
 		});
 	});
 
