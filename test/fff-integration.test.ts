@@ -11,7 +11,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { CursorStore, fffFormatGrepText } from "../src/fff-helpers.js";
 import piPrettyExtension, { type PiPrettyDeps } from "../src/index.js";
 import {
@@ -314,6 +314,7 @@ describe("piPrettyExtension integration", () => {
 	}
 
 	beforeEach(() => {
+		vi.useRealTimers();
 		tools = new Map();
 		events = new Map();
 		mockPi = {
@@ -335,6 +336,10 @@ describe("piPrettyExtension integration", () => {
 		const deps = makeDeps(withFFF, finderOverrides);
 		piPrettyExtension(mockPi, deps);
 	}
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
 
 	async function loadWithFFF(finderOverrides?: Record<string, any>) {
 		load(true, finderOverrides);
@@ -712,6 +717,29 @@ describe("piPrettyExtension integration", () => {
 				frecencyDbPath: "/tmp/pi-pretty-test/pi-pretty/fff/frecency.mdb",
 				historyDbPath: "/tmp/pi-pretty-test/pi-pretty/fff/history.mdb",
 			}));
+		});
+
+		it("delayed FFF status clear does not read a stale session ctx", async () => {
+			vi.useFakeTimers();
+			const setStatus = vi.fn();
+			let stale = false;
+			const ctx = {
+				cwd: "/tmp/test",
+				get ui() {
+					if (stale) throw new Error("stale ctx");
+					return { setStatus };
+				},
+			};
+
+			load(true);
+			const start = events.get("session_start")!;
+			await start({}, ctx);
+			stale = true;
+
+			vi.advanceTimersByTime(3000);
+
+			expect(setStatus).toHaveBeenNthCalledWith(1, "fff", "FFF indexed");
+			expect(setStatus).toHaveBeenNthCalledWith(2, "fff", undefined);
 		});
 
 		it("shutdown → subsequent find falls back to SDK", async () => {

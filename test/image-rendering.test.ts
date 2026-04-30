@@ -128,11 +128,8 @@ describe("image rendering terminal detection", () => {
 		expect(__imageInternals.getTmuxPassthroughWarning("kitty")).toBeNull();
 	});
 
-	it("renders explicit warning for read image when tmux passthrough is off", async () => {
-		process.env.TMUX = "/tmp/tmux-1000/default,123,0";
-		process.env.TERM_PROGRAM = "tmux";
-		process.env.KITTY_WINDOW_ID = "1";
-		__imageInternals.setTmuxAllowPassthroughOverrideForTests(false);
+	it("renders image metadata without a second inline preview", async () => {
+		process.env.TERM_PROGRAM = "kitty";
 
 		const readTool = loadReadTool(async () => ({
 			content: [{ type: "image", data: Buffer.from("fake").toString("base64"), mimeType: "image/png" }],
@@ -147,25 +144,10 @@ describe("image rendering terminal detection", () => {
 			invalidate: () => {},
 		});
 
-		expect(rendered.getText()).toContain("allow-passthrough is off");
-	});
-
-	it("warns on non-PNG payloads for kitty protocol", async () => {
-		process.env.TERM_PROGRAM = "kitty";
-
-		const readTool = loadReadTool(async () => ({
-			content: [{ type: "image", data: Buffer.from("jpeg").toString("base64"), mimeType: "image/jpeg" }],
-		}));
-
-		const result = await readTool.execute("t1", { path: "media/photo.jpg" }, null, null, {});
-		const rendered = readTool.renderResult(result, {}, {}, {
-			lastComponent: new MockText(),
-			isError: false,
-			state: {},
-			expanded: false,
-			invalidate: () => {},
-		});
-
-		expect(rendered.getText()).toContain("supports PNG payloads");
+		expect(rendered.getText()).toContain("image/png");
+		expect(rendered.getText()).not.toContain("\x1b_G");
+		expect(result.content).toEqual([
+			{ type: "image", data: Buffer.from("fake").toString("base64"), mimeType: "image/png" },
+		]);
 	});
 });

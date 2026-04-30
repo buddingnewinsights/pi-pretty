@@ -134,13 +134,11 @@ function getThemeBgAnsi(theme: BgTheme, key: string): string | null {
 }
 
 /** Read themed tool backgrounds and update BG_BASE / BG_ERROR + RST.
- *  Call once when theme is first available. Idempotent. */
-let _bgBaseResolved = false;
+ *  Recompute on each render so runtime theme changes are respected. */
 function resolveBaseBackground(theme: BgTheme | null | undefined): void {
-	if (_bgBaseResolved || !theme?.getBgAnsi) return;
-	_bgBaseResolved = true;
+	if (!theme?.getBgAnsi) return;
 
-	BG_BASE = getThemeBgAnsi(theme, "toolSuccessBg") ?? BG_DEFAULT;
+	BG_BASE = getThemeBgAnsi(theme, "toolBg") ?? getThemeBgAnsi(theme, "background") ?? BG_DEFAULT;
 	BG_ERROR = getThemeBgAnsi(theme, "toolErrorBg") ?? BG_BASE;
 	RST = `\x1b[0m${BG_BASE}`;
 }
@@ -439,47 +437,6 @@ export const __imageInternals = {
 		_tmuxAllowPassthroughOverrideForTests = undefined;
 	},
 };
-
-/**
- * Render base64 image inline using iTerm2 inline image protocol.
- * Protocol: ESC ] 1337 ; File=[args] : base64data BEL
- */
-function renderIterm2Image(base64Data: string, opts: { width?: string; name?: string } = {}): string {
-	const args: string[] = ["inline=1", "preserveAspectRatio=1"];
-	if (opts.width) args.push(`width=${opts.width}`);
-	if (opts.name) args.push(`name=${Buffer.from(opts.name).toString("base64")}`);
-	const byteSize = Math.ceil((base64Data.length * 3) / 4);
-	args.push(`size=${byteSize}`);
-	const seq = `\x1b]1337;File=${args.join(";")}:${base64Data}\x07`;
-	return tmuxWrap(seq);
-}
-
-/**
- * Render base64 image inline using Kitty graphics protocol.
- * Protocol: ESC _G <key>=<value>,...; <base64data> ESC \
- * Chunked in 4096-byte pieces as required by protocol.
- * Supported by: Kitty, Ghostty
- */
-function renderKittyImage(base64Data: string, opts: { cols?: number } = {}): string {
-	const chunks: string[] = [];
-	const CHUNK_SIZE = 4096;
-
-	for (let i = 0; i < base64Data.length; i += CHUNK_SIZE) {
-		const chunk = base64Data.slice(i, i + CHUNK_SIZE);
-		const isFirst = i === 0;
-		const isLast = i + CHUNK_SIZE >= base64Data.length;
-		const more = isLast ? 0 : 1;
-
-		if (isFirst) {
-			const colPart = opts.cols ? `,c=${opts.cols}` : "";
-			chunks.push(tmuxWrap(`\x1b_Ga=T,f=100,t=d,m=${more}${colPart};${chunk}\x1b\\`));
-		} else {
-			chunks.push(tmuxWrap(`\x1b_Gm=${more};${chunk}\x1b\\`));
-		}
-	}
-
-	return chunks.join("");
-}
 
 /**
  * Get human-readable file size
@@ -1156,8 +1113,9 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 			if (_fffPartialIndex) {
 				ctx.ui?.notify?.("FFF: scan timed out — using partial index. Run /fff-rescan when ready.", "warning");
 			} else {
-				ctx.ui?.setStatus?.("fff", "FFF indexed");
-				setTimeout(() => ctx.ui?.setStatus?.("fff", undefined), 3000);
+				const ui = ctx.ui;
+				ui?.setStatus?.("fff", "FFF indexed");
+				setTimeout(() => ui?.setStatus?.("fff", undefined), 3000);
 			}
 		} catch (error: unknown) {
 			ctx.ui?.notify?.(`FFF init failed: ${getErrorMessage(error)}`, "error");
@@ -1242,45 +1200,15 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 
 			const d = result.details as RenderDetails | undefined;
 
-			// Image rendering
+			// Image reads keep the original image content so Pi's native TUI renderer
+			// can display it exactly once. pi-pretty only renders metadata here;
+			// rendering another inline image caused duplicate previews.
 			if (d?._type === "readImage") {
-				const tw = termW();
-				const out: string[] = [];
-				const fname = basename(d.filePath);
 				const byteSize = Math.ceil(((d.data as string).length * 3) / 4);
 				const sizeStr = humanSize(byteSize);
 				const mimeStr = d.mimeType ?? "image";
 
-				out.push(`  ${fileIcon(d.filePath)}${FG_DIM}${mimeStr} · ${sizeStr}${RST}`);
-				out.push(rule(tw));
-
-				const protocol = detectImageProtocol();
-				const passthroughWarning = getTmuxPassthroughWarning(protocol);
-				if (passthroughWarning) {
-					out.push(`  ${FG_YELLOW}${passthroughWarning}${RST}`);
-				} else if (protocol === "kitty") {
-					if (d.mimeType && d.mimeType !== "image/png") {
-						out.push(
-							`  ${FG_YELLOW}Kitty/Ghostty inline preview currently supports PNG payloads (got ${d.mimeType})${RST}`,
-						);
-					} else {
-						const imgCols = Math.min(tw - 4, 80);
-						out.push(renderKittyImage(d.data, { cols: imgCols }));
-					}
-				} else if (protocol === "iterm2") {
-					const imgWidth = Math.min(tw - 4, 80);
-					out.push(
-						renderIterm2Image(d.data, {
-							width: `${imgWidth}`,
-							name: fname,
-						}),
-					);
-				} else {
-					out.push(`  ${FG_DIM}(Inline image preview requires Ghostty, iTerm2, WezTerm, or Kitty)${RST}`);
-				}
-
-				out.push(rule(tw));
-				text.setText(fillToolBackground(out.join("\n")));
+				text.setText(fillToolBackground(`  ${fileIcon(d.filePath)}${FG_DIM}${mimeStr} · ${sizeStr}${RST}`));
 				return text;
 			}
 
