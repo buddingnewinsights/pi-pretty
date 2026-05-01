@@ -41,6 +41,7 @@ import type {
 	ReadToolInput,
 	ToolRenderResultOptions,
 } from "@mariozechner/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { codeToANSI } from "@shikijs/cli";
 import type { BundledLanguage, BundledTheme } from "shiki";
 
@@ -148,7 +149,6 @@ function renderToolError(error: string, theme: FgTheme): string {
 }
 
 const ESC_RE = "\u001b";
-const ANSI_RE = new RegExp(`${ESC_RE}\\[[0-9;]*m`, "g");
 const ANSI_CAPTURE_RE = new RegExp(`${ESC_RE}\\[([0-9;]*)m`, "g");
 
 // ---------------------------------------------------------------------------
@@ -174,10 +174,6 @@ function normalizeShikiContrast(ansi: string): string {
 // Utilities
 // ---------------------------------------------------------------------------
 
-function strip(s: string): string {
-	return s.replace(ANSI_RE, "");
-}
-
 function normalizeLineEndings(text: string): string {
 	return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
@@ -195,8 +191,9 @@ function fillToolBackground(text: string, bg = BG_BASE): string {
 		.split("\n")
 		.map((line) => {
 			const normalized = preserveToolBackground(line, bg);
-			const padding = Math.max(0, width - strip(normalized).length);
-			return `${bg}${normalized}${" ".repeat(padding)}${RST}`;
+			const fitted = preserveToolBackground(truncateToWidth(normalized, width, ""), bg);
+			const padding = Math.max(0, width - visibleWidth(fitted));
+			return `${bg}${fitted}${" ".repeat(padding)}${RST}`;
 		})
 		.join("\n");
 }
@@ -205,7 +202,7 @@ function termW(): number {
 	const stderrWithColumns = process.stderr as NodeJS.WriteStream & { columns?: number };
 	const raw =
 		process.stdout.columns || stderrWithColumns.columns || Number.parseInt(process.env.COLUMNS ?? "", 10) || 200;
-	return Math.max(80, Math.min(raw - 4, 210));
+	return Math.max(1, Math.min(raw - 4, 210));
 }
 
 function shortPath(cwd: string, home: string, p: string): string {
@@ -621,7 +618,7 @@ async function renderFileContent(
 	const endLine = startLine + show.length - 1;
 	const nw = Math.max(3, String(endLine).length);
 	const gw = nw + 3; // num + " │ "
-	const cw = Math.max(20, tw - gw);
+	const cw = Math.max(1, tw - gw);
 
 	const out: string[] = [];
 	out.push(rule(tw));
@@ -629,25 +626,7 @@ async function renderFileContent(
 	for (let i = 0; i < hl.length; i++) {
 		const ln = startLine + i;
 		const code = hl[i] ?? show[i] ?? "";
-		const plain = strip(code);
-		// Truncate if wider than available
-		let display = code;
-		if (plain.length > cw) {
-			let vis = 0;
-			let j = 0;
-			while (j < code.length && vis < cw - 1) {
-				if (code[j] === "\x1b") {
-					const e = code.indexOf("m", j);
-					if (e !== -1) {
-						j = e + 1;
-						continue;
-					}
-				}
-				vis++;
-				j++;
-			}
-			display = `${code.slice(0, j)}${RST}${FG_DIM}›${RST}`;
-		}
+		const display = truncateToWidth(code, cw, `${FG_DIM}›`);
 		out.push(`${lnum(ln, nw)} ${FG_RULE}│${RST} ${display}${RST}`);
 	}
 

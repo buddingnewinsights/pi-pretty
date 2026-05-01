@@ -1,3 +1,4 @@
+import { visibleWidth } from "@mariozechner/pi-tui";
 import { describe, expect, it } from "vitest";
 
 import piPrettyExtension from "../src/index.js";
@@ -18,6 +19,11 @@ const mockTheme = {
 	bold: (text: string) => text,
 };
 
+const ansiMockTheme = {
+	fg: (_key: string, text: string) => `\x1b[31m${text}\x1b[0m`,
+	bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
+};
+
 function mockToolFactory(exec: any) {
 	return (_cwd: string) => ({
 		name: "mock",
@@ -25,6 +31,20 @@ function mockToolFactory(exec: any) {
 		parameters: { type: "object", properties: {} },
 		execute: exec,
 	});
+}
+
+function withStdoutColumns<T>(columns: number, fn: () => T): T {
+	const descriptor = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+	Object.defineProperty(process.stdout, "columns", { configurable: true, value: columns });
+	try {
+		return fn();
+	} finally {
+		if (descriptor) {
+			Object.defineProperty(process.stdout, "columns", descriptor);
+		} else {
+			delete (process.stdout as NodeJS.WriteStream & { columns?: number }).columns;
+		}
+	}
 }
 
 function loadBashTool() {
@@ -105,5 +125,43 @@ describe("bash renderCall expansion", () => {
 
 		expect(collapsed.getText()).toContain("5s timeout");
 		expect(expanded.getText()).toContain("5s timeout");
+	});
+
+	it("truncates expanded ANSI tool headers to the terminal width before padding backgrounds", () => {
+		withStdoutColumns(84, () => {
+			const bashTool = loadBashTool();
+			const command = `printf '${"界".repeat(120)}'`;
+
+			const rendered = bashTool.renderCall({ command }, ansiMockTheme, {
+				lastComponent: new MockText(),
+				isError: false,
+				state: {},
+				expanded: true,
+				invalidate: () => {},
+			});
+
+			for (const line of rendered.getText().split("\n")) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+			}
+		});
+	});
+
+	it("does not exceed narrow terminal widths", () => {
+		withStdoutColumns(24, () => {
+			const bashTool = loadBashTool();
+			const command = `printf '${"x".repeat(120)}'`;
+
+			const rendered = bashTool.renderCall({ command }, ansiMockTheme, {
+				lastComponent: new MockText(),
+				isError: false,
+				state: {},
+				expanded: true,
+				invalidate: () => {},
+			});
+
+			for (const line of rendered.getText().split("\n")) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(20);
+			}
+		});
 	});
 });
