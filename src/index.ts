@@ -28,7 +28,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
 
 import type { FileFinder, FileItem, GrepResult, SearchResult } from "@ff-labs/fff-node";
-import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type {
 	AgentToolResult,
 	AgentToolUpdateCallback,
@@ -40,8 +40,8 @@ import type {
 	LsToolInput,
 	ReadToolInput,
 	ToolRenderResultOptions,
-} from "@mariozechner/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { codeToANSI } from "@shikijs/cli";
 import type { BundledLanguage, BundledTheme } from "shiki";
 
@@ -1017,13 +1017,13 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 		_fffDbDir = null;
 	} else {
 		try {
-			sdk = require("@mariozechner/pi-coding-agent");
+			sdk = require("@earendil-works/pi-coding-agent");
 			createReadTool = sdk.createReadToolDefinition ?? sdk.createReadTool;
 			createBashTool = sdk.createBashToolDefinition ?? sdk.createBashTool;
 			createLsTool = sdk.createLsToolDefinition ?? sdk.createLsTool;
 			createFindTool = sdk.createFindToolDefinition ?? sdk.createFindTool;
 			createGrepTool = sdk.createGrepToolDefinition ?? sdk.createGrepTool;
-			TextComponent = require("@mariozechner/pi-tui").Text;
+			TextComponent = require("@earendil-works/pi-tui").Text;
 		} catch {
 			return;
 		}
