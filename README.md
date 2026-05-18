@@ -140,6 +140,7 @@ Optional environment variables:
 - `PRETTY_MAX_PREVIEW_LINES` (default: `80`)
 - `PRETTY_CACHE_LIMIT` (default: `128`)
 - `PRETTY_ICONS` (`nerd` by default, set to `none` to disable icons)
+- `PRETTY_DISABLE_TOOLS` — comma-separated list of tool names to skip during registration (e.g. `read,grep`). Useful when another extension already owns one of these tool names. All tools (read, bash, ls, find, grep, multi_grep) are registered by default.
 
 ## Development
 

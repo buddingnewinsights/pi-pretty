@@ -1035,6 +1035,17 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 	const sp = (p: string) => shortPath(cwd, home, p);
 	const multiGrepRipgrepFallback = deps?.multiGrepRipgrepFallback ?? runMultiGrepRipgrepFallback;
 
+	// Parse PRETTY_DISABLE_TOOLS — comma-separated tool names to skip
+	const disabledTools = new Set(
+		(process.env.PRETTY_DISABLE_TOOLS ?? "")
+			.split(",")
+			.map((s) => s.trim().toLowerCase())
+			.filter(Boolean),
+	);
+	function isToolEnabled(name: string): boolean {
+		return !disabledTools.has(name.toLowerCase());
+	}
+
 	// ===================================================================
 	// FFF initialization (optional — graceful fallback to SDK)
 	// ===================================================================
@@ -1111,7 +1122,8 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 
 	const origRead = createReadTool(cwd);
 
-	pi.registerTool({
+	if (isToolEnabled("read")) {
+		pi.registerTool({
 		...origRead,
 		name: "read",
 
@@ -1218,12 +1230,13 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 			return text;
 		},
 	});
+	}
 
 	// ===================================================================
 	// bash — colored exit status
 	// ===================================================================
 
-	if (createBashTool) {
+	if (createBashTool && isToolEnabled("bash")) {
 		const origBash = createBashTool(cwd);
 
 		pi.registerTool({
@@ -1321,7 +1334,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 	// ls — tree view with icons
 	// ===================================================================
 
-	if (createLsTool) {
+	if (createLsTool && isToolEnabled("ls")) {
 		const origLs = createLsTool(cwd);
 
 		pi.registerTool({
@@ -1387,7 +1400,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 	// find — grouped file list with icons
 	// ===================================================================
 
-	if (createFindTool) {
+	if (createFindTool && isToolEnabled("find")) {
 		const origFind = createFindTool(cwd);
 
 		pi.registerTool({
@@ -1490,7 +1503,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 	// grep — highlighted matches with line numbers
 	// ===================================================================
 
-	if (createGrepTool) {
+	if (createGrepTool && isToolEnabled("grep")) {
 		const origGrep = createGrepTool(cwd);
 
 		pi.registerTool({
@@ -1626,7 +1639,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 	// SDK grep fallback otherwise)
 	// ===================================================================
 
-	if (_fffModule || createGrepTool) {
+	if ((_fffModule || createGrepTool) && isToolEnabled("multi_grep")) {
 		const multiGrepFallback = createGrepTool ? createGrepTool(cwd) : null;
 
 		pi.registerTool({

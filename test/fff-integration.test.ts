@@ -373,6 +373,44 @@ describe("piPrettyExtension integration", () => {
 			expect(events.has("session_start")).toBe(true);
 			expect(events.has("session_shutdown")).toBe(true);
 		});
+
+		it("skips tools listed in PRETTY_DISABLE_TOOLS", () => {
+			process.env.PRETTY_DISABLE_TOOLS = "read,find";
+			load();
+			expect(tools.has("read"), "read should be disabled").toBe(false);
+			expect(tools.has("find"), "find should be disabled").toBe(false);
+			expect(tools.has("bash"), "bash should be enabled").toBe(true);
+			expect(tools.has("grep"), "grep should be enabled").toBe(true);
+			expect(tools.has("ls"), "ls should be enabled").toBe(true);
+			delete process.env.PRETTY_DISABLE_TOOLS;
+		});
+
+		it("skips multi_grep when listed in PRETTY_DISABLE_TOOLS", () => {
+			process.env.PRETTY_DISABLE_TOOLS = "multi_grep";
+			load(true);
+			expect(tools.has("multi_grep"), "multi_grep should be disabled").toBe(false);
+			expect(tools.has("read"), "read should still be enabled").toBe(true);
+			delete process.env.PRETTY_DISABLE_TOOLS;
+		});
+
+		it("handles whitespace in PRETTY_DISABLE_TOOLS", () => {
+			process.env.PRETTY_DISABLE_TOOLS = " bash , ls ";
+			load();
+			expect(tools.has("bash"), "bash should be disabled").toBe(false);
+			expect(tools.has("ls"), "ls should be disabled").toBe(false);
+			expect(tools.has("read"), "read should be enabled").toBe(true);
+			expect(tools.has("grep"), "grep should be enabled").toBe(true);
+			delete process.env.PRETTY_DISABLE_TOOLS;
+		});
+
+		it("empty PRETTY_DISABLE_TOOLS registers all tools", () => {
+			process.env.PRETTY_DISABLE_TOOLS = "";
+			load();
+			for (const n of ["find", "grep", "read", "bash", "ls"]) {
+				expect(tools.has(n), `missing: ${n}`).toBe(true);
+			}
+			delete process.env.PRETTY_DISABLE_TOOLS;
+		});
 	});
 
 	// ---- find: SDK fallback (no FFF) -----------------------------------
