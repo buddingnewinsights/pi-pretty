@@ -185,8 +185,8 @@ function preserveToolBackground(ansi: string, bg: string): string {
 	});
 }
 
-function fillToolBackground(text: string, bg = BG_BASE): string {
-	const width = termW();
+function fillToolBackground(text: string, bg = BG_BASE, width?: number): string {
+	if (width === undefined) width = termW();
 	return text
 		.split("\n")
 		.map((line) => {
@@ -199,9 +199,16 @@ function fillToolBackground(text: string, bg = BG_BASE): string {
 }
 
 function termW(): number {
-	const stderrWithColumns = process.stderr as NodeJS.WriteStream & { columns?: number };
+	// When process.stdout.columns is available (real terminal or compositor override),
+	// use it directly — the TUI/compositor already provides the exact content width.
+	// The -4 safety margin only applies to fallback values (stderr.columns, env.COLUMNS, default).
+	if (process.stdout.columns) {
+		return Math.max(1, Math.min(process.stdout.columns, 210));
+	}
 	const raw =
-		process.stdout.columns || stderrWithColumns.columns || Number.parseInt(process.env.COLUMNS ?? "", 10) || 200;
+		(process.stderr as NodeJS.WriteStream & { columns?: number }).columns ||
+		Number.parseInt(process.env.COLUMNS ?? "", 10) ||
+		200;
 	return Math.max(1, Math.min(raw - 4, 210));
 }
 
@@ -605,6 +612,7 @@ async function renderFileContent(
 	filePath: string,
 	offset = 1,
 	maxLines = MAX_PREVIEW_LINES,
+	width?: number,
 ): Promise<string> {
 	const normalizedContent = normalizeLineEndings(content);
 	const lines = normalizedContent.split("\n");
@@ -613,7 +621,7 @@ async function renderFileContent(
 	const lg = lang(filePath);
 	const hl = await hlBlock(show.join("\n"), lg);
 
-	const tw = termW();
+	const tw = width ?? termW();
 	const startLine = offset;
 	const endLine = startLine + show.length - 1;
 	const nw = Math.max(3, String(endLine).length);
@@ -778,6 +786,77 @@ async function renderGrepResults(text: string, pattern: string): Promise<string>
 	}
 
 	return out.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Tool metrics — elapsed time + output size
+// pi-droid-styling-inspired: wrap execute to record performance, display in footer.
+// ---------------------------------------------------------------------------
+
+const ELAPSED_KEY = "__prettyElapsedMs";
+const CHARS_KEY = "__prettyOutputChars";
+
+/** Format milliseconds for display. */
+function formatElapsedMs(ms: number | undefined): string {
+	if (typeof ms !== "number" || !Number.isFinite(ms)) return "";
+	if (ms < 1000) return `${Math.round(ms)}ms`;
+	const s = ms / 1000;
+	return s < 10 ? `${s.toFixed(1)}s` : `${Math.round(s)}s`;
+}
+
+/** Format character count for display. */
+function formatCharCount(chars: number | undefined): string {
+	if (typeof chars !== "number" || !Number.isFinite(chars) || chars <= 0) return "";
+	if (chars < 1000) return `${chars} chars`;
+	if (chars < 10_000) return `${(chars / 1000).toFixed(1)}k chars`;
+	return `${Math.round(chars / 1000)}k chars`;
+}
+
+/** Compute text output length from a tool result. */
+function getOutputCharCount(result: ToolResultLike): number {
+	const content = result.content;
+	if (!Array.isArray(content)) return 0;
+	let length = 0;
+	for (const block of content) {
+		if (block.type !== "text") continue;
+		length += String(block.text ?? "").replace(/\r/g, "").length;
+	}
+	return length;
+}
+
+/**
+ * Wrap a tool's execute function to measure elapsed time and output size.
+ * Annotates result.details with __prettyElapsedMs and __prettyOutputChars.
+ */
+function wrapExecuteWithMetrics<TParams, TDetails>(
+	execute: (...args: any[]) => Promise<ToolResultLike<TDetails>>,
+): ToolExecutor<TParams, TDetails> {
+	return async (
+		tid: string,
+		params: TParams,
+		sig?: AbortSignal,
+		onUpdate?: AgentToolUpdateCallback<TDetails | undefined>,
+		ctx?: ExtensionContext,
+	) => {
+		const start = performance.now();
+		const result = await execute(tid, params, sig, onUpdate, ctx);
+		const elapsedMs = performance.now() - start;
+		const details = (result.details ?? {}) as Record<string, unknown>;
+		details[ELAPSED_KEY] = elapsedMs;
+		details[CHARS_KEY] = getOutputCharCount(result);
+		(result as { details: Record<string, unknown> }).details = details;
+		return result;
+	};
+}
+
+/** Render a tool metrics line: "3.2s · 14.2k chars" */
+function renderToolMetrics(result: ToolResultLike): string {
+	const details = result.details as Record<string, unknown> | undefined;
+	if (!details) return "";
+	const elapsed = formatElapsedMs(details[ELAPSED_KEY] as number | undefined);
+	const chars = formatCharCount(details[CHARS_KEY] as number | undefined);
+	if (!elapsed && !chars) return "";
+	return `${FG_DIM}· ${[elapsed, chars].filter(Boolean).join(" · ")}${RST}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1047,6 +1126,53 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 	}
 
 	// ===================================================================
+	// Generic renderResult for custom tools (no custom renderer)
+	// ===================================================================
+
+	const origRegisterTool = pi.registerTool.bind(pi);
+	pi.registerTool = (tool: any) => {
+		if (!tool.renderResult && !tool.renderCall) {
+			const toolName = tool.label ?? tool.name ?? "tool";
+			tool.renderResult = (result: any, _opt: unknown, theme: ThemeLike, ctx: RenderContextLike) => {
+				resolveBaseBackground(theme);
+				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
+
+				if (ctx.isError) {
+					text.setText(renderToolError(getTextContent(result) || "Error", theme));
+					return text;
+				}
+
+				const content = getTextContent(result);
+				if (content) {
+					const renderWidth = termW();
+					const lines = content.split("\n");
+					const maxShow = ctx.expanded ? lines.length : Math.min(lines.length, MAX_PREVIEW_LINES);
+					const preview = lines.slice(0, maxShow).join("\n");
+					const more = lines.length > maxShow ? `\n${FG_DIM}... ${lines.length - maxShow} more lines${RST}` : "";
+					const metrics = renderToolMetrics(result);
+					text.setText(
+						fillToolBackground(`  ${preview}${more}${metrics ? `\n  ${metrics}` : ""}`, undefined, renderWidth),
+					);
+				} else {
+					text.setText(fillToolBackground(`  ${theme.fg("dim", "(no text output)")}`));
+				}
+
+				return text;
+			};
+
+			tool.renderCall = (args: any, theme: ThemeLike, ctx: RenderContextLike) => {
+				resolveBaseBackground(theme);
+				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
+				text.setText(
+					fillToolBackground(`${theme.fg("toolTitle", theme.bold(toolName))}`),
+				);
+				return text;
+			};
+		}
+		origRegisterTool(tool);
+	};
+
+	// ===================================================================
 	// FFF initialization (optional — graceful fallback to SDK)
 	// ===================================================================
 
@@ -1127,13 +1253,13 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 		...origRead,
 		name: "read",
 
-		async execute(
+		execute: wrapExecuteWithMetrics(async (
 			tid: string,
 			params: ReadParams,
 			sig: AbortSignal | undefined,
 			upd: AgentToolUpdateCallback<unknown> | undefined,
 			ctx: ExtensionContext,
-		) {
+		) => {
 			const result = (await origRead.execute(tid, params, sig, upd, ctx)) as ToolResultLike;
 
 			const fp = params.path ?? "";
@@ -1164,7 +1290,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 			}
 
 			return result;
-		},
+		}),
 
 		renderCall(args: ReadParams, theme: ThemeLike, ctx: RenderContextLike) {
 			resolveBaseBackground(theme);
@@ -1204,22 +1330,24 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 			}
 
 			if (d?._type === "readFile" && d.content) {
-				const key = `read:${d.filePath}:${d.offset}:${d.lineCount}:${termW()}`;
+				const renderWidth = termW();
+				const key = `read:${d.filePath}:${d.offset}:${d.lineCount}:${renderWidth}`;
 				if (ctx.state._rk !== key) {
 					ctx.state._rk = key;
-					const info = `${FG_DIM}${d.lineCount} lines${RST}`;
-					ctx.state._rt = fillToolBackground(`  ${info}`);
+					const metrics = renderToolMetrics(result);
+					const info = `${FG_DIM}${d.lineCount} lines${RST}${metrics}`;
+					ctx.state._rt = fillToolBackground(`  ${info}`, undefined, renderWidth);
 
 					const maxShow = ctx.expanded ? d.lineCount : MAX_PREVIEW_LINES;
-					renderFileContent(d.content, d.filePath, d.offset, maxShow)
+					renderFileContent(d.content, d.filePath, d.offset, maxShow, renderWidth)
 						.then((rendered: string) => {
 							if (ctx.state._rk !== key) return;
-							ctx.state._rt = fillToolBackground(`  ${info}\n${rendered}`);
+							ctx.state._rt = fillToolBackground(`  ${info}\n${rendered}`, undefined, renderWidth);
 							ctx.invalidate();
 						})
 						.catch(() => {});
 				}
-				text.setText(ctx.state._rt ?? fillToolBackground(`  ${FG_DIM}${d.lineCount} lines${RST}`));
+				text.setText(ctx.state._rt ?? fillToolBackground(`  ${FG_DIM}${d.lineCount} lines${RST}${renderToolMetrics(result)}`, undefined, renderWidth));
 				return text;
 			}
 
@@ -1243,13 +1371,13 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 			...origBash,
 			name: "bash",
 
-			async execute(
+			execute: wrapExecuteWithMetrics(async (
 				tid: string,
 				params: BashParams,
 				sig: AbortSignal | undefined,
 				upd: AgentToolUpdateCallback<unknown> | undefined,
 				ctx: ExtensionContext,
-			) {
+			) => {
 				const result = (await origBash.execute(tid, params, sig, upd, ctx)) as ToolResultLike;
 				const textContent = getTextContent(result);
 
@@ -1270,7 +1398,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				});
 
 				return result;
-			},
+			}),
 
 			renderCall(args: BashParams, theme: ThemeLike, ctx: RenderContextLike) {
 				resolveBaseBackground(theme);
@@ -1300,7 +1428,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 					const { summary } = renderBashOutput(d.text, d.exitCode);
 					const lines = d.text.split("\n");
 					const lineCount = lines.length;
-					const lineInfo = lineCount > 1 ? `  ${FG_DIM}(${lineCount} lines)${RST}` : "";
+					const lineInfo = lineCount > 1 ? `  ${FG_DIM}(${lineCount} lines)${RST} ${renderToolMetrics(result)}` : ` ${renderToolMetrics(result)}`;
 					const header = `  ${summary}${lineInfo}`;
 
 					if (d.text.trim()) {
@@ -1341,13 +1469,13 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 			...origLs,
 			name: "ls",
 
-			async execute(
+			execute: wrapExecuteWithMetrics(async (
 				tid: string,
 				params: LsParams,
 				sig: AbortSignal | undefined,
 				upd: AgentToolUpdateCallback<unknown> | undefined,
 				ctx: ExtensionContext,
-			) {
+			) => {
 				const result = (await origLs.execute(tid, params, sig, upd, ctx)) as ToolResultLike;
 				const textContent = getTextContent(result);
 				const fp = params.path ?? cwd;
@@ -1361,7 +1489,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				});
 
 				return result;
-			},
+			}),
 
 			renderCall(args: LsParams, theme: ThemeLike, ctx: RenderContextLike) {
 				resolveBaseBackground(theme);
@@ -1383,7 +1511,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				const d = result.details as RenderDetails | undefined;
 				if (d?._type === "lsResult" && d.text) {
 					const tree = renderTree(d.text, d.path);
-					const info = `${FG_DIM}${d.entryCount} entries${RST}`;
+					const info = `${FG_DIM}${d.entryCount} entries${RST}${renderToolMetrics(result)}`;
 					text.setText(fillToolBackground(`  ${info}\n${tree}`));
 					return text;
 				}
@@ -1407,13 +1535,13 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 			...origFind,
 			name: "find",
 
-			async execute(
+			execute: wrapExecuteWithMetrics(async (
 				tid: string,
 				params: FindParams,
 				sig: AbortSignal | undefined,
 				upd: unknown,
 				ctx: ExtensionContext,
-			) {
+			) => {
 				// Try FFF first (frecency-ranked, SIMD-accelerated)
 				if (_fffFinder && !_fffFinder.isDestroyed) {
 					try {
@@ -1456,7 +1584,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				});
 
 				return result;
-			},
+			}),
 
 			renderCall(args: FindParams, theme: ThemeLike, ctx: RenderContextLike) {
 				resolveBaseBackground(theme);
@@ -1486,7 +1614,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				const d = result.details;
 				if (d?._type === "findResult" && d.text) {
 					const rendered = renderFindResults(d.text);
-					const info = `${FG_DIM}${d.matchCount} files${RST}`;
+					const info = `${FG_DIM}${d.matchCount} files${RST}${renderToolMetrics(result)}`;
 					text.setText(fillToolBackground(`  ${info}\n${rendered}`));
 					return text;
 				}
@@ -1510,13 +1638,13 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 			...origGrep,
 			name: "grep",
 
-			async execute(
+			execute: wrapExecuteWithMetrics(async (
 				tid: string,
 				params: GrepParams,
 				sig: AbortSignal | undefined,
 				upd: unknown,
 				ctx: ExtensionContext,
-			) {
+			) => {
 				// Try FFF first (SIMD-accelerated, frecency-ranked).
 				// FFF 0.5.2 can abort the process when path/glob constraints meet
 				// Unicode filenames, so constrained searches use the SDK fallback.
@@ -1576,7 +1704,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				});
 
 				return result;
-			},
+			}),
 
 			renderCall(args: GrepParams, theme: ThemeLike, ctx: RenderContextLike) {
 				resolveBaseBackground(theme);
@@ -1608,21 +1736,23 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 
 				const d = result.details;
 				if (d?._type === "grepResult" && d.text) {
-					const key = `grep:${d.pattern}:${d.matchCount}:${termW()}`;
+					const renderWidth = termW();
+					const key = `grep:${d.pattern}:${d.matchCount}:${renderWidth}`;
 					if (ctx.state._gk !== key) {
 						ctx.state._gk = key;
-						const info = `${FG_DIM}${d.matchCount} matches${RST}`;
-						ctx.state._gt = fillToolBackground(`  ${info}`);
+						const metrics = renderToolMetrics(result);
+						const info = `${FG_DIM}${d.matchCount} matches${RST}${metrics}`;
+						ctx.state._gt = fillToolBackground(`  ${info}`, undefined, renderWidth);
 
 						renderGrepResults(d.text, d.pattern)
 							.then((rendered: string) => {
 								if (ctx.state._gk !== key) return;
-								ctx.state._gt = fillToolBackground(`  ${info}\n${rendered}`);
+								ctx.state._gt = fillToolBackground(`  ${info}\n${rendered}`, undefined, renderWidth);
 								ctx.invalidate();
 							})
 							.catch(() => {});
 					}
-					text.setText(ctx.state._gt ?? fillToolBackground(`  ${FG_DIM}${d.matchCount} matches${RST}`));
+					text.setText(ctx.state._gt ?? fillToolBackground(`  ${FG_DIM}${d.matchCount} matches${RST}${renderToolMetrics(result)}`, undefined, renderWidth));
 					return text;
 				}
 
@@ -1689,13 +1819,13 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				required: ["patterns"],
 			},
 
-			async execute(
+			execute: wrapExecuteWithMetrics(async (
 				tid: string,
 				params: MultiGrepParams,
 				sig: AbortSignal | undefined,
 				upd: unknown,
 				ctx: ExtensionContext,
-			) {
+			) => {
 				if (sig?.aborted) return makeTextResult("Aborted", {});
 
 				if (!params.patterns || params.patterns.length === 0) {
@@ -1813,7 +1943,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 					const message = getErrorMessage(error);
 					return makeTextResult(`multi_grep error: ${message}`, { error: message });
 				}
-			},
+			}),
 
 			renderCall(args: MultiGrepParams, theme: ThemeLike, ctx: RenderContextLike) {
 				resolveBaseBackground(theme);
@@ -1850,7 +1980,8 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 					const key = `mgrep:${d.pattern}:${d.matchCount}:${termW()}`;
 					if (ctx.state._mgk !== key) {
 						ctx.state._mgk = key;
-						const info = `${FG_DIM}${d.matchCount} matches${RST}`;
+						const metrics = renderToolMetrics(result);
+						const info = `${FG_DIM}${d.matchCount} matches${RST}${metrics}`;
 						ctx.state._mgt = `  ${info}`;
 
 						renderGrepResults(d.text, d.pattern)
@@ -1861,7 +1992,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 							})
 							.catch(() => {});
 					}
-					text.setText(ctx.state._mgt ?? `  ${FG_DIM}${d.matchCount} matches${RST}`);
+					text.setText(ctx.state._mgt ?? `  ${FG_DIM}${d.matchCount} matches${RST}${renderToolMetrics(result)}`);
 					return text;
 				}
 

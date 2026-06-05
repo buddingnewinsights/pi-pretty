@@ -141,7 +141,7 @@ describe("bash renderCall expansion", () => {
 			});
 
 			for (const line of rendered.getText().split("\n")) {
-				expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+				expect(visibleWidth(line)).toBeLessThanOrEqual(84);
 			}
 		});
 	});
@@ -160,7 +160,7 @@ describe("bash renderCall expansion", () => {
 			});
 
 			for (const line of rendered.getText().split("\n")) {
-				expect(visibleWidth(line)).toBeLessThanOrEqual(20);
+				expect(visibleWidth(line)).toBeLessThanOrEqual(24);
 			}
 		});
 	});
