@@ -300,8 +300,16 @@ function fillToolBackground(text: string, _bg = BG_BASE, width?: number): string
 			const normalized = preserveToolBackground(line, _bg);
 			// Truncate to prevent overflow when width is known.
 			const fitted = width ? preserveToolBackground(truncateToWidth(normalized, width, ""), _bg) : normalized;
-			// Do NOT wrap in ${bg}...${rst} or pad with trailing spaces.
-			// The TUI's applyBackgroundToLine handles all background + width padding.
+			// Pad remaining width with trailing spaces so the ANSI background
+			// fills the full line width. The TUI Box does NOT call
+			// applyBackgroundToLine on tool renderResult output, so pi-pretty
+			// must do the padding itself.
+			if (width) {
+				const visibleLen = visibleWidth(fitted);
+				if (visibleLen < width) {
+					return fitted + " ".repeat(width - visibleLen) + RST;
+				}
+			}
 			return fitted;
 		})
 		.join("\n");
