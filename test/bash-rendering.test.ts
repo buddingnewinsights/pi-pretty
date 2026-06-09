@@ -12,6 +12,9 @@ class MockText {
 	getText() {
 		return this.text;
 	}
+	render(_width: number) {
+		return this.text.split("\n");
+	}
 }
 
 const mockTheme = {
@@ -212,23 +215,37 @@ describe("bash renderCall expansion", () => {
 		});
 	});
 
-	it("renderCall and renderResult use the same cached width", () => {
-		const bashTool = loadBashTool();
-		const state: Record<string, string | undefined> = {};
+	it("does not emit internal ANSI background padding or resets for bash results", () => {
+		withStdoutColumns(64, () => {
+			const bashTool = loadBashTool();
+			const rendered = bashTool.renderResult(
+				{
+					content: [{ type: "text", text: "output" }],
+					details: { _type: "bashResult", text: "output", exitCode: 1, command: "test" },
+				},
+				{},
+				ansiMockTheme,
+				{
+					lastComponent: new MockText(),
+					isError: true,
+					state: { _tw: "64" },
+					expanded: false,
+					invalidate: () => {},
+				},
+			);
 
-		// renderCall at width 80
-		withStdoutColumns(80, () => {
-			bashTool.renderCall({ command: "echo hi" }, mockTheme, {
-				lastComponent: new MockText(),
-				isError: false,
-				state,
-				expanded: false,
-				invalidate: () => {},
-			});
+			expect(rendered.getText()).not.toMatch(/\x1b\[48;/);
+			expect(rendered.getText()).not.toContain("\x1b[0m");
+			expect(rendered.getText()).not.toContain("\x1b[49m");
+			for (const line of rendered.getText().split("\n")) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(64);
+			}
 		});
+	});
 
-		// renderResult at a DIFFERENT width — should still use 80 from the cache
+	it("renders bash results using the component render width instead of stdout columns", () => {
 		withStdoutColumns(120, () => {
+			const bashTool = loadBashTool();
 			const rendered = bashTool.renderResult(
 				{ content: [{ type: "text", text: "hello world" }], details: { _type: "bashResult", text: "hello world", exitCode: 0, command: "echo hi" } },
 				{},
@@ -236,13 +253,16 @@ describe("bash renderCall expansion", () => {
 				{
 					lastComponent: new MockText(),
 					isError: false,
-					state,
+					state: {},
 					expanded: false,
 					invalidate: () => {},
 				},
 			);
+
+			rendered.render(80);
+			const lines = stripAnsi(rendered.getText()).split("\n");
+			expect(lines.some((line) => /^─{80}$/.test(line))).toBe(true);
 			for (const line of rendered.getText().split("\n")) {
-				// Each line should be padded to 80 (the cached width), not 120
 				expect(visibleWidth(line)).toBeLessThanOrEqual(80);
 			}
 		});

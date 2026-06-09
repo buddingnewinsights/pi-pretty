@@ -41,7 +41,7 @@ import type {
 	ReadToolInput,
 	ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { codeToANSI } from "@shikijs/cli";
 import type { BundledLanguage, BundledTheme } from "shiki";
 
@@ -279,15 +279,25 @@ function normalizeLineEndings(text: string): string {
 	return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
-function preserveToolBackground(ansi: string, bg: string): string {
-	return ansi.replace(ANSI_CAPTURE_RE, (seq, params: string) => {
-		const codes = params.split(";");
-		// Patch SGR resets (0) and explicit bg resets (49) to re-apply the line bg.
-		// Also patch any background color set (48 at codes[0]) so inline BG_BASE
-		// from RST doesn't override the line bg on error lines.
-		return params === "0" || codes.includes("49") || codes[0] === "48"
-			? `${seq}${bg}`
-			: seq;
+const RESET_WITHOUT_BG = "\x1b[22;23;24;25;27;28;29;39m";
+
+function preserveBoxBackground(ansi: string): string {
+	return ansi.replace(ANSI_CAPTURE_RE, (_seq, params: string) => {
+		if (!params || params === "0") return RESET_WITHOUT_BG;
+
+		const parts = params.split(";").filter(Boolean);
+		const kept: string[] = [];
+		for (let i = 0; i < parts.length; i++) {
+			const code = Number(parts[i]);
+			if (code === 49 || (code >= 40 && code <= 47) || (code >= 100 && code <= 107)) continue;
+			if (code === 48) {
+				if (parts[i + 1] === "5") i += 2;
+				else if (parts[i + 1] === "2") i += 4;
+				continue;
+			}
+			kept.push(parts[i]);
+		}
+		return kept.length ? `\x1b[${kept.join(";")}m` : "";
 	});
 }
 
@@ -295,22 +305,11 @@ function fillToolBackground(text: string, _bg = BG_BASE, width?: number): string
 	return text
 		.split("\n")
 		.map((line) => {
-			// Patch inline ANSI resets to re-apply the line bg so syntax highlighting
-			// doesn't lose the background after \x1b[0m.
-			const normalized = preserveToolBackground(line, _bg);
-			// Truncate to prevent overflow when width is known.
-			const fitted = width ? preserveToolBackground(truncateToWidth(normalized, width, ""), _bg) : normalized;
-			// Pad remaining width with trailing spaces so the ANSI background
-			// fills the full line width. The TUI Box does NOT call
-			// applyBackgroundToLine on tool renderResult output, so pi-pretty
-			// must do the padding itself.
-			if (width) {
-				const visibleLen = visibleWidth(fitted);
-				if (visibleLen < width) {
-					return fitted + " ".repeat(width - visibleLen) + RST;
-				}
-			}
-			return fitted;
+			// The TUI Box owns full-width success/error backgrounds. Remove
+			// background-affecting ANSI from text so inline resets don't punch
+			// holes in the Box background after status labels like "✗ exit 1".
+			const fitted = width ? truncateToWidth(line, width, "") : line;
+			return preserveBoxBackground(fitted);
 		})
 		.join("\n");
 }
@@ -994,8 +993,17 @@ type ToolTextContent = TextContent;
 type ToolImageContent = ImageContent;
 type ToolContent = TextContent | ImageContent;
 type ToolResultLike<TDetails = unknown> = AgentToolResult<TDetails | undefined>;
-type TextComponentLike = { setText(value: string): void; getText?: () => string };
+type TextComponentLike = { setText(value: string): void; getText?: () => string; render?: (width: number) => string[] };
 type TextComponentCtor = new (text?: string, x?: number, y?: number) => TextComponentLike;
+type WidthAwareTextComponent = TextComponentLike & {
+	__piPrettyWidthAware?: boolean;
+	__piPrettyRender?: (width: number) => string[];
+	__piPrettyRenderedKey?: string;
+	__piPrettyTask?: {
+		key: (width: number) => string;
+		render: (width: number) => string;
+	};
+};
 type ThemeLike = BgTheme & FgTheme & { bold: (text: string) => string };
 type RenderContextLike<TState extends Record<string, string | undefined> = Record<string, string | undefined>> = {
 	lastComponent?: TextComponentLike;
@@ -1058,7 +1066,7 @@ type MultiGrepParams = {
 	context?: number;
 	limit?: number;
 };
-type BashRenderState = { _tw?: string };
+type BashRenderState = Record<string, string | undefined>;
 type GrepRenderState = { _gk?: string; _gt?: string };
 type MultiGrepRenderState = { _mgk?: string; _mgt?: string };
 type FindResultDetails = { _type: "findResult"; text: string; pattern: string; matchCount: number };
@@ -1248,6 +1256,28 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 	);
 	function isToolEnabled(name: string): boolean {
 		return !disabledTools.has(name.toLowerCase());
+	}
+
+	function getWidthAwareText(lastComponent: TextComponentLike | undefined): WidthAwareTextComponent {
+		const text = (lastComponent ?? new TextComponent("", 0, 0)) as WidthAwareTextComponent;
+		if (text.__piPrettyWidthAware) return text;
+		const baseRender = typeof text.render === "function" ? text.render.bind(text) : null;
+		if (!baseRender) return text;
+		text.__piPrettyWidthAware = true;
+		text.__piPrettyRender = baseRender;
+		text.render = (width: number) => {
+			const task = text.__piPrettyTask;
+			if (task) {
+				const renderWidth = Math.max(1, Math.floor(width || termW()));
+				const key = task.key(renderWidth);
+				if (text.__piPrettyRenderedKey !== key) {
+					text.__piPrettyRenderedKey = key;
+					text.setText(task.render(renderWidth));
+				}
+			}
+			return text.__piPrettyRender?.(width) ?? [];
+		};
+		return text;
 	}
 
 	// ===================================================================
@@ -1537,15 +1567,13 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				const displayCmd = ctx.expanded || cmd.length <= 80 ? cmd : `${cmd.slice(0, 77)}…`;
 				const bg = ctx.isError ? BG_ERROR : undefined;
 				const title = `${theme.fg("toolTitle", theme.bold("bash"))} ${theme.fg("accent", displayCmd)}${timeout}`;
-				const tw = termW();
-				ctx.state._tw = String(tw);
-				text.setText(fillToolBackground(title, bg, tw));
+				text.setText(fillToolBackground(title, bg, termW()));
 				return text;
 			},
 
 			renderResult(result: ToolResultLike, _opt: unknown, theme: ThemeLike, ctx: RenderContextLike<BashRenderState>) {
 				resolveBaseBackground(theme);
-				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
+				const text = getWidthAwareText(ctx.lastComponent);
 
 				const details = result.details as RenderDetails | undefined;
 				const textContent = getTextContent(result);
@@ -1570,26 +1598,29 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 					const lineCount = lines.length;
 					const lineInfo = lineCount > 1 ? `  ${FG_DIM}(${lineCount} lines)${RST} ${renderToolMetrics(result)}` : ` ${renderToolMetrics(result)}`;
 					const header = `  ${summary}${lineInfo}`;
-
-					if (outputText.trim()) {
+					const renderAtWidth = (width: number) => {
+						if (!outputText.trim()) return fillToolBackground(header, bg, width);
 						const maxShow = ctx.expanded ? lineCount : MAX_PREVIEW_LINES;
 						const show = lines.slice(0, maxShow);
-						const tw = ctx.state._tw ? Number(ctx.state._tw) : termW();
-						const out: string[] = [header, rule(tw)];
+						const out: string[] = [header, rule(width)];
 						for (const line of show) {
 							out.push(`  ${line}`);
 						}
-						out.push(rule(tw));
+						out.push(rule(width));
 						if (lineCount > maxShow) {
 							out.push(`${FG_DIM}  … ${lineCount - maxShow} more lines${RST}`);
 						}
-						text.setText(fillToolBackground(out.join("\n"), bg, tw));
-					} else {
-						text.setText(fillToolBackground(header, bg, ctx.state._tw ? Number(ctx.state._tw) : termW()));
-					}
+						return fillToolBackground(out.join("\n"), bg, width);
+					};
+					text.__piPrettyTask = {
+						key: (width: number) => `bash:${ctx.expanded ? "1" : "0"}:${width}:${d.exitCode ?? "killed"}:${outputText.length}:${renderToolMetrics(result)}`,
+						render: renderAtWidth,
+					};
+					text.setText(renderAtWidth(termW()));
 					return text;
 				}
 
+				text.__piPrettyTask = undefined;
 				if (ctx.isError) {
 					text.setText(renderToolError(getTextContent(result) || "Error", theme));
 					return text;
