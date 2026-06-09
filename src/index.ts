@@ -291,17 +291,18 @@ function preserveToolBackground(ansi: string, bg: string): string {
 	});
 }
 
-function fillToolBackground(text: string, bg = BG_BASE, _width?: number): string {
-	// Per-line RST matching the line's background so padding doesn't show a different color
-	const rst = `\x1b[0m${bg}`;
+function fillToolBackground(text: string, _bg = BG_BASE, width?: number): string {
 	return text
 		.split("\n")
 		.map((line) => {
-			const normalized = preserveToolBackground(line, bg);
-			// Truncate to prevent overflow, but do NOT pad with trailing spaces.
-			// The TUI's applyBackgroundToLine handles all actual width padding.
-			const fitted = _width ? preserveToolBackground(truncateToWidth(normalized, _width, ""), bg) : normalized;
-			return `${bg}${fitted}${rst}`;
+			// Patch inline ANSI resets to re-apply the line bg so syntax highlighting
+			// doesn't lose the background after \x1b[0m.
+			const normalized = preserveToolBackground(line, _bg);
+			// Truncate to prevent overflow when width is known.
+			const fitted = width ? preserveToolBackground(truncateToWidth(normalized, width, ""), _bg) : normalized;
+			// Do NOT wrap in ${bg}...${rst} or pad with trailing spaces.
+			// The TUI's applyBackgroundToLine handles all background + width padding.
+			return fitted;
 		})
 		.join("\n");
 }
