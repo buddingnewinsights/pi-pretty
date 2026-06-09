@@ -235,11 +235,18 @@ function compactErrorLines(error: string): string[] {
 	return compactedLines;
 }
 
+function stripBashExitStatusLine(text: string): string {
+	return normalizeLineEndings(text)
+		.split("\n")
+		.filter((line) => !/^Command exited with code \d+$/i.test(line.trim()))
+		.join("\n");
+}
+
 function renderToolError(error: string, theme: FgTheme): string {
 	const body = compactErrorLines(error)
 		.map((line) => `  ${line ? theme.fg("error", line) : ""}`)
 		.join("\n");
-	return fillToolBackground(`\n${body}`, BG_ERROR);
+	return fillToolBackground(body, BG_ERROR);
 }
 
 const ESC_RE = "\u001b";
@@ -275,21 +282,26 @@ function normalizeLineEndings(text: string): string {
 function preserveToolBackground(ansi: string, bg: string): string {
 	return ansi.replace(ANSI_CAPTURE_RE, (seq, params: string) => {
 		const codes = params.split(";");
-		return params === "0" || codes.includes("49") ? `${seq}${bg}` : seq;
+		// Patch SGR resets (0) and explicit bg resets (49) to re-apply the line bg.
+		// Also patch any background color set (48 at codes[0]) so inline BG_BASE
+		// from RST doesn't override the line bg on error lines.
+		return params === "0" || codes.includes("49") || codes[0] === "48"
+			? `${seq}${bg}`
+			: seq;
 	});
 }
 
-function fillToolBackground(text: string, bg = BG_BASE, width?: number): string {
-	if (width === undefined) width = termW();
+function fillToolBackground(text: string, bg = BG_BASE, _width?: number): string {
 	// Per-line RST matching the line's background so padding doesn't show a different color
 	const rst = `\x1b[0m${bg}`;
 	return text
 		.split("\n")
 		.map((line) => {
 			const normalized = preserveToolBackground(line, bg);
-			const fitted = preserveToolBackground(truncateToWidth(normalized, width, ""), bg);
-			const padding = Math.max(0, width - visibleWidth(fitted));
-			return `${bg}${fitted}${" ".repeat(padding)}${rst}`;
+			// Truncate to prevent overflow, but do NOT pad with trailing spaces.
+			// The TUI's applyBackgroundToLine handles all actual width padding.
+			const fitted = _width ? preserveToolBackground(truncateToWidth(normalized, _width, ""), bg) : normalized;
+			return `${bg}${fitted}${rst}`;
 		})
 		.join("\n");
 }
@@ -741,6 +753,13 @@ async function renderFileContent(
 	return out.join("\n");
 }
 
+function inferBashExitCode(text: string, fallback: number | null): number | null {
+	const exitMatch = text.match(/(?:exit code|exited with(?: code)?|exit status)[:\s]*(\d+)/i);
+	if (exitMatch) return Number(exitMatch[1]);
+	if (text.includes("command not found") || text.includes("No such file")) return 1;
+	return fallback;
+}
+
 /** Render bash output with colored exit code and stderr highlighting. */
 function renderBashOutput(text: string, exitCode: number | null): { summary: string; body: string } {
 	const isOk = exitCode === 0;
@@ -1030,6 +1049,7 @@ type MultiGrepParams = {
 	context?: number;
 	limit?: number;
 };
+type BashRenderState = { _tw?: string };
 type GrepRenderState = { _gk?: string; _gt?: string };
 type MultiGrepRenderState = { _mgk?: string; _mgt?: string };
 type FindResultDetails = { _type: "findResult"; text: string; pattern: string; matchCount: number };
@@ -1480,14 +1500,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				const result = (await origBash.execute(tid, params, sig, upd, ctx)) as ToolResultLike;
 				const textContent = getTextContent(result);
 
-				let exitCode: number | null = 0;
-				if (textContent) {
-					const exitMatch = textContent.match(/(?:exit code|exited with(?: code)?|exit status)[:\s]*(\d+)/i);
-					if (exitMatch) exitCode = Number(exitMatch[1]);
-					if (textContent.includes("command not found") || textContent.includes("No such file")) {
-						exitCode = 1;
-					}
-				}
+				const exitCode = textContent ? inferBashExitCode(textContent, 0) : 0;
 
 				setResultDetails(result, {
 					_type: "bashResult",
@@ -1499,31 +1512,42 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				return result;
 			}),
 
-			renderCall(args: BashParams, theme: ThemeLike, ctx: RenderContextLike) {
+			renderCall(args: BashParams, theme: ThemeLike, ctx: RenderContextLike<BashRenderState>) {
 				resolveBaseBackground(theme);
 				const cmd = args.command ?? "";
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 				const timeout = args.timeout ? ` ${theme.fg("muted", `(${args.timeout}s timeout)`)}` : "";
 				const displayCmd = ctx.expanded || cmd.length <= 80 ? cmd : `${cmd.slice(0, 77)}…`;
 				const bg = ctx.isError ? BG_ERROR : undefined;
-				text.setText(
-					fillToolBackground(
-						`${theme.fg("toolTitle", theme.bold("bash"))} ${theme.fg("accent", displayCmd)}${timeout}`,
-						bg,
-					),
-				);
+				const title = `${theme.fg("toolTitle", theme.bold("bash"))} ${theme.fg("accent", displayCmd)}${timeout}`;
+				const tw = termW();
+				ctx.state._tw = String(tw);
+				text.setText(fillToolBackground(title, bg, tw));
 				return text;
 			},
 
-			renderResult(result: ToolResultLike, _opt: unknown, theme: ThemeLike, ctx: RenderContextLike) {
+			renderResult(result: ToolResultLike, _opt: unknown, theme: ThemeLike, ctx: RenderContextLike<BashRenderState>) {
 				resolveBaseBackground(theme);
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 
-				const d = result.details as RenderDetails | undefined;
+				const details = result.details as RenderDetails | undefined;
+				const textContent = getTextContent(result);
+				const d: Extract<RenderDetails, { _type: "bashResult" }> | undefined =
+					details?._type === "bashResult"
+						? details
+						: textContent || ctx.isError
+							? {
+									_type: "bashResult",
+									text: textContent || "Error",
+									exitCode: inferBashExitCode(textContent, ctx.isError ? 1 : 0),
+									command: "",
+								}
+							: undefined;
 				if (d?._type === "bashResult") {
 					const isBashError = ctx.isError || (d.exitCode !== null && d.exitCode !== 0);
 					const bg = isBashError ? BG_ERROR : undefined;
-					const outputText = isBashError ? compactErrorLines(d.text).join("\n") : d.text;
+					const cleanedText = stripBashExitStatusLine(d.text);
+					const outputText = isBashError ? compactErrorLines(cleanedText).join("\n") : cleanedText;
 					const { summary } = renderBashOutput(outputText, d.exitCode);
 					const lines = outputText.split("\n");
 					const lineCount = lines.length;
@@ -1533,7 +1557,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 					if (outputText.trim()) {
 						const maxShow = ctx.expanded ? lineCount : MAX_PREVIEW_LINES;
 						const show = lines.slice(0, maxShow);
-						const tw = termW();
+						const tw = ctx.state._tw ? Number(ctx.state._tw) : termW();
 						const out: string[] = [header, rule(tw)];
 						for (const line of show) {
 							out.push(`  ${line}`);
@@ -1542,9 +1566,9 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 						if (lineCount > maxShow) {
 							out.push(`${FG_DIM}  … ${lineCount - maxShow} more lines${RST}`);
 						}
-						text.setText(fillToolBackground(out.join("\n"), bg));
+						text.setText(fillToolBackground(out.join("\n"), bg, tw));
 					} else {
-						text.setText(fillToolBackground(header, bg));
+						text.setText(fillToolBackground(header, bg, ctx.state._tw ? Number(ctx.state._tw) : termW()));
 					}
 					return text;
 				}

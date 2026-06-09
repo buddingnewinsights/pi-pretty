@@ -131,7 +131,7 @@ describe("bash renderCall expansion", () => {
 		expect(expanded.getText()).toContain("5s timeout");
 	});
 
-	it("truncates expanded ANSI tool headers to the terminal width before padding backgrounds", () => {
+	it("truncates ANSI tool headers that exceed the terminal width", () => {
 		withStdoutColumns(84, () => {
 			const bashTool = loadBashTool();
 			const command = `printf '${"界".repeat(120)}'`;
@@ -169,6 +169,22 @@ describe("bash renderCall expansion", () => {
 		});
 	});
 
+	it("does not add extra internal padding to the bash title in error state", () => {
+		withStdoutColumns(48, () => {
+			const bashTool = loadBashTool();
+			const rendered = bashTool.renderCall({ command: "false" }, mockTheme, {
+				lastComponent: new MockText(),
+				isError: true,
+				state: {},
+				expanded: false,
+				invalidate: () => {},
+			});
+
+			const lines = stripAnsi(rendered.getText()).split("\n");
+			expect(lines[0]).toMatch(/^bash false/);
+		});
+	});
+
 	it("pads every line of multi-line tool errors", () => {
 		withStdoutColumns(48, () => {
 			const bashTool = loadBashTool();
@@ -186,10 +202,49 @@ describe("bash renderCall expansion", () => {
 			);
 
 			const lines = stripAnsi(rendered.getText()).split("\n");
-			expect(lines[0].trim()).toBe("");
-			expect(lines[1]).toMatch(/^  first error/);
-			expect(lines[2]).toMatch(/^  /);
-			expect(lines[3]).toMatch(/^  second error/);
+			expect(lines[0]).toContain("✗ exit 1");
+			expect(lines[1]).toMatch(/^─+$/);
+			expect(lines[2]).toMatch(/^  first error/);
+			expect(lines[3]).toMatch(/^  /);
+			expect(lines[3].trim()).toBe("");
+			expect(lines[4]).toMatch(/^  second error/);
+			expect(lines[5]).toMatch(/^─+$/);
+		});
+	});
+
+	it("renderCall and renderResult use the same cached width", () => {
+		const bashTool = loadBashTool();
+		const state: Record<string, string | undefined> = {};
+
+		// renderCall at width 80
+		withStdoutColumns(80, () => {
+			bashTool.renderCall({ command: "echo hi" }, mockTheme, {
+				lastComponent: new MockText(),
+				isError: false,
+				state,
+				expanded: false,
+				invalidate: () => {},
+			});
+		});
+
+		// renderResult at a DIFFERENT width — should still use 80 from the cache
+		withStdoutColumns(120, () => {
+			const rendered = bashTool.renderResult(
+				{ content: [{ type: "text", text: "hello world" }], details: { _type: "bashResult", text: "hello world", exitCode: 0, command: "echo hi" } },
+				{},
+				mockTheme,
+				{
+					lastComponent: new MockText(),
+					isError: false,
+					state,
+					expanded: false,
+					invalidate: () => {},
+				},
+			);
+			for (const line of rendered.getText().split("\n")) {
+				// Each line should be padded to 80 (the cached width), not 120
+				expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+			}
 		});
 	});
 });
