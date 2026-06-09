@@ -79,7 +79,11 @@ function resolvePrettyTheme(agentDir?: string): BundledTheme {
 
 let THEME: BundledTheme = resolvePrettyTheme();
 
+/** Stored agent directory for config lookups during render (set during init). */
+let _agentDir: string | undefined;
+
 function setPrettyTheme(agentDir?: string): void {
+	_agentDir = agentDir;
 	const resolvedTheme = resolvePrettyTheme(agentDir);
 	if (resolvedTheme === THEME) return;
 	THEME = resolvedTheme;
@@ -95,6 +99,74 @@ function envInt(name: string, fallback: number): number {
 const MAX_HL_CHARS = envInt("PRETTY_MAX_HL_CHARS", 80_000);
 const MAX_PREVIEW_LINES = envInt("PRETTY_MAX_PREVIEW_LINES", 80);
 const CACHE_LIMIT = envInt("PRETTY_CACHE_LIMIT", 128);
+
+// ---------------------------------------------------------------------------
+// pi-pretty.json config
+// ---------------------------------------------------------------------------
+
+/** Schema for pi-pretty.json — user config file placed adjacent to settings.json. */
+export interface PrettyConfig {
+	/** Background color overrides for tool output boxes. */
+	background?: {
+		/** Background color for normal tool output (hex, e.g. "#1e1e2e"). */
+		tool?: string;
+		/** Background color for error tool output (hex, e.g. "#2a1e1e"). Defaults to tool bg. */
+		error?: string;
+	};
+}
+
+/** Convert a hex color string (e.g. "#1e1e2e") to an ANSI 24-bit background escape. */
+function hexToAnsiBg(hex: string): string | null {
+	const m = hex.match(/^#?([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/);
+	if (!m) return null;
+	const r = Number.parseInt(m[1], 16);
+	const g = Number.parseInt(m[2], 16);
+	const b = Number.parseInt(m[3], 16);
+	return `\x1b[48;2;${r};${g};${b}m`;
+}
+
+/** Read pi-pretty.json from the agent directory. Returns empty object on any error. */
+function readPrettyConfig(agentDir?: string): PrettyConfig {
+	const resolvedDir = agentDir ?? getDefaultAgentDir();
+	if (!resolvedDir) return {};
+
+	try {
+		const raw = readFileSync(join(resolvedDir, "pi-pretty.json"), "utf8");
+		const parsed = JSON.parse(raw) as PrettyConfig;
+
+		// Validate: background fields must be valid hex strings if present
+		if (parsed.background) {
+			if (parsed.background.tool && !hexToAnsiBg(parsed.background.tool)) {
+				parsed.background.tool = undefined;
+			}
+			if (parsed.background.error && !hexToAnsiBg(parsed.background.error)) {
+				parsed.background.error = undefined;
+			}
+			// Drop empty background block
+			if (!parsed.background.tool && !parsed.background.error) {
+				parsed.background = undefined;
+			}
+		}
+
+		return parsed;
+	} catch {
+		return {};
+	}
+}
+
+/** Apply backgrounds from pi-pretty.json config. Returns true if config was applied. */
+function applyPrettyConfigBg(agentDir?: string): boolean {
+	const config = readPrettyConfig(agentDir);
+	if (!config.background?.tool) return false;
+
+	const toolBg = hexToAnsiBg(config.background.tool);
+	if (!toolBg) return false;
+
+	BG_BASE = toolBg;
+	BG_ERROR = config.background.error ? (hexToAnsiBg(config.background.error) ?? toolBg) : toolBg;
+	RST = `\x1b[0m${BG_BASE}`;
+	return true;
+}
 
 // ---------------------------------------------------------------------------
 // ANSI
@@ -113,8 +185,8 @@ const FG_BLUE = "\x1b[38;2;100;140;220m";
 const FG_MUTED = "\x1b[38;2;139;148;158m";
 
 const BG_DEFAULT = "\x1b[49m";
-let BG_BASE = BG_DEFAULT; // tool box success/base bg — updated from theme's toolSuccessBg
-let BG_ERROR = BG_DEFAULT; // tool box error bg — updated from theme's toolErrorBg
+let BG_BASE = BG_DEFAULT; // tool box success/base bg — updated from theme's toolSuccessBg or pi-pretty.json
+let BG_ERROR = BG_DEFAULT; // tool box error bg — updated from theme's toolErrorBg or pi-pretty.json
 
 type BgTheme = { getBgAnsi?: (key: string) => string };
 type FgTheme = { fg: (key: string, text: string) => string };
@@ -135,17 +207,39 @@ function getThemeBgAnsi(theme: BgTheme, key: string): string | null {
 }
 
 /** Read themed tool backgrounds and update BG_BASE / BG_ERROR + RST.
- *  Recompute on each render so runtime theme changes are respected. */
+ *  Recompute on each render so runtime theme changes are respected.
+ *  Priority: pi-pretty.json config > theme > terminal default. */
 function resolveBaseBackground(theme: BgTheme | null | undefined): void {
+	// Config takes highest priority: PRETTY_CONFIG_DIR env > agent dir
+	const configDir = process.env.PRETTY_CONFIG_DIR ?? _agentDir ?? getDefaultAgentDir();
+
+	if (applyPrettyConfigBg(configDir)) return;
+
+	// Fall back to theme
 	if (!theme?.getBgAnsi) return;
 
-	BG_BASE = getThemeBgAnsi(theme, "toolBg") ?? getThemeBgAnsi(theme, "background") ?? BG_DEFAULT;
+	BG_BASE = getThemeBgAnsi(theme, "toolSuccessBg") ?? getThemeBgAnsi(theme, "toolBg") ?? getThemeBgAnsi(theme, "background") ?? BG_DEFAULT;
 	BG_ERROR = getThemeBgAnsi(theme, "toolErrorBg") ?? BG_BASE;
 	RST = `\x1b[0m${BG_BASE}`;
 }
 
+function compactErrorLines(error: string): string[] {
+	const compactedLines: string[] = [];
+	let previousBlank = false;
+	for (const line of normalizeLineEndings(error).trim().split("\n")) {
+		const isBlank = line.trim() === "";
+		if (isBlank && previousBlank) continue;
+		compactedLines.push(line);
+		previousBlank = isBlank;
+	}
+	return compactedLines;
+}
+
 function renderToolError(error: string, theme: FgTheme): string {
-	return fillToolBackground(`\n${theme.fg("error", error)}`, BG_ERROR);
+	const body = compactErrorLines(error)
+		.map((line) => `  ${line ? theme.fg("error", line) : ""}`)
+		.join("\n");
+	return fillToolBackground(`\n${body}`, BG_ERROR);
 }
 
 const ESC_RE = "\u001b";
@@ -187,13 +281,15 @@ function preserveToolBackground(ansi: string, bg: string): string {
 
 function fillToolBackground(text: string, bg = BG_BASE, width?: number): string {
 	if (width === undefined) width = termW();
+	// Per-line RST matching the line's background so padding doesn't show a different color
+	const rst = `\x1b[0m${bg}`;
 	return text
 		.split("\n")
 		.map((line) => {
 			const normalized = preserveToolBackground(line, bg);
 			const fitted = preserveToolBackground(truncateToWidth(normalized, width, ""), bg);
 			const padding = Math.max(0, width - visibleWidth(fitted));
-			return `${bg}${fitted}${" ".repeat(padding)}${RST}`;
+			return `${bg}${fitted}${" ".repeat(padding)}${rst}`;
 		})
 		.join("\n");
 }
@@ -1163,8 +1259,9 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 			tool.renderCall = (args: any, theme: ThemeLike, ctx: RenderContextLike) => {
 				resolveBaseBackground(theme);
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
+				const bg = ctx.isError ? BG_ERROR : undefined;
 				text.setText(
-					fillToolBackground(`${theme.fg("toolTitle", theme.bold(toolName))}`),
+					fillToolBackground(`${theme.fg("toolTitle", theme.bold(toolName))}`, bg),
 				);
 				return text;
 			};
@@ -1298,12 +1395,14 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 			const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 			const offset = args.offset ? ` ${theme.fg("muted", `from line ${args.offset}`)}` : "";
 			const limit = args.limit ? ` ${theme.fg("muted", `(${args.limit} lines)`)}` : "";
-			text.setText(
-				fillToolBackground(
-					`${theme.fg("toolTitle", theme.bold("read"))} ${theme.fg("accent", sp(fp))}${offset}${limit}`,
-				),
-			);
-			return text;
+		const bg = ctx.isError ? BG_ERROR : undefined;
+		text.setText(
+			fillToolBackground(
+				`${theme.fg("toolTitle", theme.bold("read"))} ${theme.fg("accent", sp(fp))}${offset}${limit}`,
+				bg,
+			),
+		);
+		return text;
 		},
 
 		renderResult(result: ToolResultLike, _opt: unknown, theme: ThemeLike, ctx: RenderContextLike) {
@@ -1383,7 +1482,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 
 				let exitCode: number | null = 0;
 				if (textContent) {
-					const exitMatch = textContent.match(/(?:exit code|exited with|exit status)[:\s]*(\d+)/i);
+					const exitMatch = textContent.match(/(?:exit code|exited with(?: code)?|exit status)[:\s]*(\d+)/i);
 					if (exitMatch) exitCode = Number(exitMatch[1]);
 					if (textContent.includes("command not found") || textContent.includes("No such file")) {
 						exitCode = 1;
@@ -1406,9 +1505,11 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 				const timeout = args.timeout ? ` ${theme.fg("muted", `(${args.timeout}s timeout)`)}` : "";
 				const displayCmd = ctx.expanded || cmd.length <= 80 ? cmd : `${cmd.slice(0, 77)}…`;
+				const bg = ctx.isError ? BG_ERROR : undefined;
 				text.setText(
 					fillToolBackground(
 						`${theme.fg("toolTitle", theme.bold("bash"))} ${theme.fg("accent", displayCmd)}${timeout}`,
+						bg,
 					),
 				);
 				return text;
@@ -1418,20 +1519,18 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				resolveBaseBackground(theme);
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 
-				if (ctx.isError) {
-					text.setText(renderToolError(getTextContent(result) || "Error", theme));
-					return text;
-				}
-
 				const d = result.details as RenderDetails | undefined;
 				if (d?._type === "bashResult") {
-					const { summary } = renderBashOutput(d.text, d.exitCode);
-					const lines = d.text.split("\n");
+					const isBashError = ctx.isError || (d.exitCode !== null && d.exitCode !== 0);
+					const bg = isBashError ? BG_ERROR : undefined;
+					const outputText = isBashError ? compactErrorLines(d.text).join("\n") : d.text;
+					const { summary } = renderBashOutput(outputText, d.exitCode);
+					const lines = outputText.split("\n");
 					const lineCount = lines.length;
 					const lineInfo = lineCount > 1 ? `  ${FG_DIM}(${lineCount} lines)${RST} ${renderToolMetrics(result)}` : ` ${renderToolMetrics(result)}`;
 					const header = `  ${summary}${lineInfo}`;
 
-					if (d.text.trim()) {
+					if (outputText.trim()) {
 						const maxShow = ctx.expanded ? lineCount : MAX_PREVIEW_LINES;
 						const show = lines.slice(0, maxShow);
 						const tw = termW();
@@ -1443,10 +1542,15 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 						if (lineCount > maxShow) {
 							out.push(`${FG_DIM}  … ${lineCount - maxShow} more lines${RST}`);
 						}
-						text.setText(fillToolBackground(out.join("\n")));
+						text.setText(fillToolBackground(out.join("\n"), bg));
 					} else {
-						text.setText(fillToolBackground(header));
+						text.setText(fillToolBackground(header, bg));
 					}
+					return text;
+				}
+
+				if (ctx.isError) {
+					text.setText(renderToolError(getTextContent(result) || "Error", theme));
 					return text;
 				}
 
@@ -1495,7 +1599,8 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				resolveBaseBackground(theme);
 				const fp = args.path ?? ".";
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
-				text.setText(fillToolBackground(`${theme.fg("toolTitle", theme.bold("ls"))} ${theme.fg("accent", sp(fp))}`));
+				const bg = ctx.isError ? BG_ERROR : undefined;
+				text.setText(fillToolBackground(`${theme.fg("toolTitle", theme.bold("ls"))} ${theme.fg("accent", sp(fp))}`, bg));
 				return text;
 			},
 
@@ -1591,8 +1696,9 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				const pattern = args.pattern ?? "";
 				const path = args.path ? ` ${theme.fg("muted", `in ${sp(args.path)}`)}` : "";
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
+				const bg = ctx.isError ? BG_ERROR : undefined;
 				text.setText(
-					fillToolBackground(`${theme.fg("toolTitle", theme.bold("find"))} ${theme.fg("accent", pattern)}${path}`),
+					fillToolBackground(`${theme.fg("toolTitle", theme.bold("find"))} ${theme.fg("accent", pattern)}${path}`, bg),
 				);
 				return text;
 			},
@@ -1712,9 +1818,11 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				const path = args.path ? ` ${theme.fg("muted", `in ${sp(args.path)}`)}` : "";
 				const glob = args.glob ? ` ${theme.fg("muted", `(${args.glob})`)}` : "";
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
+				const bg = ctx.isError ? BG_ERROR : undefined;
 				text.setText(
 					fillToolBackground(
 						`${theme.fg("toolTitle", theme.bold("grep"))} ${theme.fg("accent", pattern)}${path}${glob}`,
+						bg,
 					),
 				);
 				return text;
@@ -1951,13 +2059,14 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				const path = args.path ? ` ${theme.fg("muted", `in ${sp(args.path)}`)}` : "";
 				const constraints = args.constraints;
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
+				const bg = ctx.isError ? BG_ERROR : undefined;
 				let content =
 					theme.fg("toolTitle", theme.bold("multi_grep")) +
 					" " +
 					theme.fg("accent", patterns.map((p) => `"${p}"`).join(", "));
 				content += path;
 				if (constraints) content += theme.fg("muted", ` (${constraints})`);
-				text.setText(fillToolBackground(content));
+				text.setText(fillToolBackground(content, bg));
 				return text;
 			},
 
@@ -1971,7 +2080,7 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 				const text = ctx.lastComponent ?? new TextComponent("", 0, 0);
 
 				if (ctx.isError) {
-					text.setText(`\n${theme.fg("error", getTextContent(result) || "Error")}`);
+					text.setText(renderToolError(getTextContent(result) || "Error", theme));
 					return text;
 				}
 

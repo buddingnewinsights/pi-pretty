@@ -133,9 +133,30 @@ Use them when:
 
 ## Configuration
 
+### Config file: `~/.pi/agent/pi-pretty.json`
+
+Place a JSON file alongside Pi's `settings.json` to customize tool output backgrounds:
+
+```json
+{
+	"background": {
+		"tool": "#1e1e2e",
+		"error": "#2a1e1e"
+	}
+}
+```
+
+- `background.tool` — background color for normal tool output boxes (default: terminal default).
+- `background.error` — background color for error tool output (defaults to `tool` background).
+
+Config values take priority over theme-provided backgrounds (`toolBg` / `toolErrorBg`). To override the config directory, set `PRETTY_CONFIG_DIR` env var.
+
+### Environment variables
+
 Optional environment variables:
 
 - `PRETTY_THEME` (overrides `~/.pi/agent/settings.json` `theme`; otherwise pi-pretty falls back to that setting before `github-dark`)
+- `PRETTY_CONFIG_DIR` — directory to read `pi-pretty.json` from (default: `~/.pi/agent/`)
 - `PRETTY_MAX_HL_CHARS` (default: `80000`)
 - `PRETTY_MAX_PREVIEW_LINES` (default: `80`)
 - `PRETTY_CACHE_LIMIT` (default: `128`)

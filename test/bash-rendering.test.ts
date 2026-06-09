@@ -33,6 +33,10 @@ function mockToolFactory(exec: any) {
 	});
 }
 
+function stripAnsi(text: string): string {
+	return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 function withStdoutColumns<T>(columns: number, fn: () => T): T {
 	const descriptor = Object.getOwnPropertyDescriptor(process.stdout, "columns");
 	Object.defineProperty(process.stdout, "columns", { configurable: true, value: columns });
@@ -162,6 +166,30 @@ describe("bash renderCall expansion", () => {
 			for (const line of rendered.getText().split("\n")) {
 				expect(visibleWidth(line)).toBeLessThanOrEqual(24);
 			}
+		});
+	});
+
+	it("pads every line of multi-line tool errors", () => {
+		withStdoutColumns(48, () => {
+			const bashTool = loadBashTool();
+			const rendered = bashTool.renderResult(
+				{ content: [{ type: "text", text: "\nfirst error\n\n\nsecond error\n" }] },
+				{},
+				ansiMockTheme,
+				{
+					lastComponent: new MockText(),
+					isError: true,
+					state: {},
+					expanded: false,
+					invalidate: () => {},
+				},
+			);
+
+			const lines = stripAnsi(rendered.getText()).split("\n");
+			expect(lines[0].trim()).toBe("");
+			expect(lines[1]).toMatch(/^  first error/);
+			expect(lines[2]).toMatch(/^  /);
+			expect(lines[3]).toMatch(/^  second error/);
 		});
 	});
 });
