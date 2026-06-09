@@ -164,7 +164,7 @@ function applyPrettyConfigBg(agentDir?: string): boolean {
 
 	BG_BASE = toolBg;
 	BG_ERROR = config.background.error ? (hexToAnsiBg(config.background.error) ?? toolBg) : toolBg;
-	RST = `\x1b[0m${BG_BASE}`;
+	RST = "\x1b[0m";
 	return true;
 }
 
@@ -220,7 +220,7 @@ function resolveBaseBackground(theme: BgTheme | null | undefined): void {
 
 	BG_BASE = getThemeBgAnsi(theme, "toolSuccessBg") ?? getThemeBgAnsi(theme, "toolBg") ?? getThemeBgAnsi(theme, "background") ?? BG_DEFAULT;
 	BG_ERROR = getThemeBgAnsi(theme, "toolErrorBg") ?? BG_BASE;
-	RST = `\x1b[0m${BG_BASE}`;
+	RST = "\x1b[0m";
 }
 
 function compactErrorLines(error: string): string[] {
@@ -1509,6 +1509,14 @@ export default function piPrettyExtension(pi: PiPrettyApi, deps?: PiPrettyDeps):
 					exitCode,
 					command: params.command ?? "",
 				});
+
+				// Propagate error state to result so the TUI Box picks up
+				// toolErrorBg instead of toolSuccessBg for the background.
+				// Cast to any since AgentToolResult doesn't expose isError but
+				// the TUI runtime checks for it when selecting the background color.
+				if (exitCode !== null && exitCode !== 0) {
+					(result as any).isError = true;
+				}
 
 				return result;
 			}),
