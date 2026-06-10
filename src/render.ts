@@ -1,0 +1,402 @@
+/**
+ * pi-pretty: rendering functions for all tools.
+ *
+ * These produce ANSI-colored terminal output strings.
+ * They are async only when Shiki syntax highlighting is involved.
+ */
+
+import type { BundledLanguage } from "shiki";
+import { codeToANSI } from "@shikijs/cli";
+import { truncateToWidth } from "@earendil-works/pi-tui";
+import { basename, dirname } from "node:path";
+
+import {
+	RST, FG_LNUM, FG_DIM, FG_RULE, FG_GREEN, FG_RED, FG_YELLOW, FG_BLUE,
+	BG_BASE, BG_ERROR,
+	dirIcon, detectLang, termWidth, MAX_PREVIEW_LINES, MAX_HL_CHARS, CACHE_LIMIT,
+	resolveBaseBackground,
+} from "./config.js";
+import {
+	normalizeLineEndings, humanSize, formatElapsedMs, formatCharCount,
+	ELAPSED_KEY, CHARS_KEY, compactErrorLines,
+} from "./helpers.js";
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import type { ThemeLike, RenderCtxLike as RenderContext } from "./types.js";
+
+// ---------------------------------------------------------------------------
+// Shiki ANSI cache
+// ---------------------------------------------------------------------------
+
+import type { BundledTheme } from "shiki";
+
+const DEFAULT_THEME: BundledTheme = "github-dark";
+
+function resolveTheme(): BundledTheme {
+	const env = process.env.PRETTY_THEME as BundledTheme | undefined;
+	if (env) return env;
+	try {
+		const home = process.env.HOME;
+		if (!home) return DEFAULT_THEME;
+		const settings = JSON.parse(
+			require("node:fs").readFileSync(require("node:path").join(home, ".pi/agent/settings.json"), "utf8"),
+		);
+		return (settings.theme as BundledTheme) ?? DEFAULT_THEME;
+	} catch {
+		return DEFAULT_THEME;
+	}
+}
+
+let THEME: BundledTheme = resolveTheme();
+const _cache = new Map<string, string[]>();
+
+function _touch(k: string, v: string[]): string[] {
+	_cache.delete(k);
+	_cache.set(k, v);
+	while (_cache.size > CACHE_LIMIT) {
+		const first = _cache.keys().next().value;
+		if (first === undefined) break;
+		_cache.delete(first);
+	}
+	return v;
+}
+
+async function hlBlock(code: string, language: BundledLanguage | undefined): Promise<string[]> {
+	if (!code) return [""];
+	if (!language || code.length > MAX_HL_CHARS) return code.split("\n");
+
+	const k = `${THEME}\0${language}\0${code}`;
+	const hit = _cache.get(k);
+	if (hit) return _touch(k, hit);
+
+	try {
+		const ansi = normalizeShikiContrast(await codeToANSI(code, language, THEME));
+		const out = (ansi.endsWith("\n") ? ansi.slice(0, -1) : ansi).split("\n");
+		return _touch(k, out);
+	} catch {
+		return code.split("\n");
+	}
+}
+
+const ESC_RE = "\u001b";
+const ANSI_CAPTURE_RE = new RegExp(`${ESC_RE}\\[([0-9;]*)m`, "g");
+const FG_MUTED = "\x1b[38;2;139;148;158m";
+
+export function isLowContrastShikiFg(params: string): boolean {
+	if (params === "30" || params === "90") return true;
+	if (params === "38;5;0" || params === "38;5;8") return true;
+	if (!params.startsWith("38;2;")) return false;
+	const parts = params.split(";").map(Number);
+	if (parts.length !== 5 || parts.some((n) => !Number.isFinite(n))) return false;
+	const [, , r, g, b] = parts;
+	const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+	return luminance < 72;
+}
+
+function normalizeShikiContrast(ansi: string): string {
+	return ansi.replace(ANSI_CAPTURE_RE, (seq, params: string) => (isLowContrastShikiFg(params) ? FG_MUTED : seq));
+}
+
+// ---------------------------------------------------------------------------
+// Box background helpers
+// ---------------------------------------------------------------------------
+
+export const RESET_WITHOUT_BG = "\x1b[22;23;24;25;27;28;29;39m";
+
+export function preserveBoxBackground(ansi: string): string {
+	return ansi.replace(ANSI_CAPTURE_RE, (_seq, params: string) => {
+		if (!params || params === "0") return RESET_WITHOUT_BG;
+		const parts = params.split(";").filter(Boolean);
+		const kept: string[] = [];
+		let i = 0;
+		while (i < parts.length) {
+			const code = Number(parts[i]);
+			if (code === 38) {
+				// Foreground extended — keep entire sequence
+				kept.push(parts[i]);
+				if (parts[i + 1] === "5") { kept.push(parts[i + 1]); i += 2; }
+				else if (parts[i + 1] === "2") { kept.push(parts[i + 1], parts[i + 2], parts[i + 3], parts[i + 4]); i += 5; }
+				else { i++; }
+			} else if (code === 48) {
+				// Background extended — skip entirely
+				if (parts[i + 1] === "5") i += 3;
+				else if (parts[i + 1] === "2") i += 6;
+				else i++;
+			} else if (code === 49 || (code >= 40 && code <= 47) || (code >= 100 && code <= 107)) {
+				i++;
+			} else {
+				kept.push(parts[i]);
+				i++;
+			}
+		}
+		return kept.length ? `\x1b[${kept.join(";")}m` : "";
+	});
+}
+
+export function fillToolBackground(text: string, bg = BG_BASE, width?: number): string {
+	return text
+		.split("\n")
+		.map((line) => {
+			const fitted = width ? truncateToWidth(line, width, "") : line;
+			const stripped = preserveBoxBackground(fitted);
+			// Apply background to the entire line
+			return bg ? bg + stripped : stripped;
+		})
+		.join("\n");
+}
+
+function rule(w: number): string {
+	return `${FG_RULE}${"─".repeat(w)}${RST}`;
+}
+
+function lnum(n: number, w: number): string {
+	const v = String(n);
+	return `${FG_LNUM}${" ".repeat(Math.max(0, w - v.length))}${v}${RST}`;
+}
+
+// ---------------------------------------------------------------------------
+// Tool metrics line
+// ---------------------------------------------------------------------------
+
+export function renderToolMetrics(result: AgentToolResult<Record<string, unknown>>): string {
+	const details = result.details as Record<string, unknown> | undefined;
+	if (!details) return "";
+	const elapsed = formatElapsedMs(details[ELAPSED_KEY] as number | undefined);
+	const chars = formatCharCount(details[CHARS_KEY] as number | undefined);
+	if (!elapsed && !chars) return "";
+	return `${FG_DIM}· ${[elapsed, chars].filter(Boolean).join(" · ")}${RST}`;
+}
+
+// ---------------------------------------------------------------------------
+// Error renderer
+// ---------------------------------------------------------------------------
+
+export function renderToolError(error: string, theme: ThemeLike): string {
+	const body = compactErrorLines(error)
+		.map((line) => `  ${line ? theme.fg("error", line) : ""}`)
+		.join("\n");
+	return fillToolBackground(body, BG_ERROR);
+}
+
+// ---------------------------------------------------------------------------
+// Read — syntax-highlighted file content
+// ---------------------------------------------------------------------------
+
+export async function renderFileContent(
+	content: string,
+	filePath: string,
+	offset = 1,
+	maxLines = MAX_PREVIEW_LINES,
+	width?: number,
+): Promise<string> {
+	const normalizedContent = normalizeLineEndings(content);
+	const lines = normalizedContent.split("\n");
+	const total = lines.length;
+	const show = lines.slice(0, maxLines);
+	const lg = detectLang(filePath);
+	const hl = await hlBlock(show.join("\n"), lg);
+
+	const tw = width ?? termWidth();
+	const startLine = offset;
+	const endLine = startLine + show.length - 1;
+	const nw = Math.max(3, String(endLine).length);
+	const gw = nw + 3;
+	const cw = Math.max(1, tw - gw);
+
+	const out: string[] = [];
+	out.push(rule(tw));
+
+	for (let i = 0; i < hl.length; i++) {
+		const ln = startLine + i;
+		const code = hl[i] ?? show[i] ?? "";
+		const display = truncateToWidth(code, cw, `${FG_DIM}›`);
+		out.push(`${lnum(ln, nw)} ${FG_RULE}│${RST} ${display}${RST}`);
+	}
+
+	out.push(rule(tw));
+	if (total > maxLines) {
+		out.push(`${FG_DIM}  … ${total - maxLines} more lines (${total} total)${RST}`);
+	}
+	return out.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Bash — colored exit status
+// ---------------------------------------------------------------------------
+
+export function renderBashOutput(text: string, exitCode: number | null): { summary: string; body: string } {
+	const isOk = exitCode === 0;
+	const statusIcon = isOk ? "✓" : "✗";
+	const codeStr = exitCode !== null
+		? `${isOk ? FG_GREEN : FG_RED}${statusIcon} exit ${exitCode}${RST}`
+		: `${FG_YELLOW}⚡ killed${RST}`;
+
+	const lines = text.split("\n");
+	const maxShow = MAX_PREVIEW_LINES;
+	const show = lines.slice(0, maxShow);
+	const remaining = lines.length - maxShow;
+
+	let body = show.join("\n");
+	if (remaining > 0) body += `\n${FG_DIM}  … ${remaining} more lines${RST}`;
+
+	return { summary: codeStr, body };
+}
+
+// ---------------------------------------------------------------------------
+// Ls — tree view with icons
+// ---------------------------------------------------------------------------
+
+export function renderTree(text: string, _basePath: string): string {
+	const lines = text.trim().split("\n").filter(Boolean);
+	if (!lines.length) return `${FG_DIM}(empty directory)${RST}`;
+
+	const out: string[] = [];
+	const total = lines.length;
+	const show = lines.slice(0, MAX_PREVIEW_LINES);
+
+	for (let i = 0; i < show.length; i++) {
+		const entry = show[i].trim();
+		const isLast = i === show.length - 1 && total <= MAX_PREVIEW_LINES;
+		const prefix = isLast ? "└── " : "├── ";
+		const connector = `${FG_RULE}${prefix}${RST}`;
+		const isDir = entry.endsWith("/");
+		const name = isDir ? entry.slice(0, -1) : entry;
+		const icon = isDir ? dirIcon() : "";
+		out.push(`${connector}${icon}${isDir ? `${FG_BLUE}\x1b[1m${name}${RST}` : name}`);
+	}
+
+	if (total > MAX_PREVIEW_LINES) {
+		out.push(`${FG_RULE}└── ${RST}${FG_DIM}… ${total - MAX_PREVIEW_LINES} more entries${RST}`);
+	}
+
+	return out.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Find — grouped file list with icons
+// ---------------------------------------------------------------------------
+
+export function renderFindResults(text: string): string {
+	const lines = text.trim().split("\n").filter(Boolean);
+	if (!lines.length) return `${FG_DIM}(no matches)${RST}`;
+
+	const groups = new Map<string, string[]>();
+	for (const line of lines) {
+		const trimmed = line.trim();
+		const dir = dirname(trimmed) || ".";
+		const file = basename(trimmed);
+		if (!groups.has(dir)) groups.set(dir, []);
+		const bucket = groups.get(dir);
+		if (bucket) bucket.push(file);
+	}
+
+	const out: string[] = [];
+	let count = 0;
+
+	for (const [dir, files] of groups) {
+		if (count > 0) out.push("");
+		out.push(`${dirIcon()}${FG_BLUE}\x1b[1m${dir}/${RST}`);
+		for (let i = 0; i < files.length; i++) {
+			if (count >= MAX_PREVIEW_LINES) {
+				out.push(`  ${FG_DIM}… ${lines.length - count} more files${RST}`);
+				return out.join("\n");
+			}
+			const isLast = i === files.length - 1;
+			const prefix = isLast ? "└── " : "├── ";
+			out.push(`  ${FG_RULE}${prefix}${RST}${files[i]}`);
+			count++;
+		}
+	}
+
+	return out.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Grep — highlighted matches with line numbers
+// ---------------------------------------------------------------------------
+
+export async function renderGrepResults(text: string, pattern: string): Promise<string> {
+	const lines = normalizeLineEndings(text).split("\n");
+	if (!lines.length || (lines.length === 1 && !lines[0].trim())) return `${FG_DIM}(no matches)${RST}`;
+
+	const out: string[] = [];
+	let currentFile = "";
+	let count = 0;
+
+	let re: RegExp | null = null;
+	try {
+		re = new RegExp(`(${pattern})`, "gi");
+	} catch { /* skip highlighting */ }
+
+	for (const line of lines) {
+		if (count >= MAX_PREVIEW_LINES) {
+			out.push(`${FG_DIM}  … more matches${RST}`);
+			break;
+		}
+		const fileMatch = line.match(/^(.+?)[:-](\d+)[:-](.*)$/);
+		if (fileMatch) {
+			const [, file, lineNo, content] = fileMatch;
+			if (file !== currentFile) {
+				if (currentFile) out.push("");
+				out.push(`${FG_BLUE}\x1b[1m${file}${RST}`);
+				currentFile = file;
+			}
+			const nw = Math.max(3, lineNo.length);
+			let display = content;
+			if (re) display = content.replace(re, `${RST}${FG_YELLOW}\x1b[1m$1${RST}`);
+			out.push(`  ${lnum(Number(lineNo), nw)} ${FG_RULE}│${RST} ${display}${RST}`);
+			count++;
+		} else if (line.trim() === "--") {
+			out.push(`  ${FG_DIM}  ···${RST}`);
+		} else if (line.trim()) {
+			out.push(line);
+			count++;
+		}
+	}
+
+	return out.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Generic renderCall / renderResult for custom tools
+// ---------------------------------------------------------------------------
+
+export function makeRenderCall(toolName: string) {
+	return (args: Record<string, unknown>, theme: ThemeLike, ctx: RenderContext) => {
+		resolveBaseBackground(theme);
+		const text = ctx.lastComponent ?? new (require("@earendil-works/pi-tui").Text)("", 0, 0);
+		const bg = ctx.isError ? BG_ERROR : undefined;
+		text.setText(fillToolBackground(`${theme.fg("toolTitle", theme.bold(toolName))}`, bg));
+		return text;
+	};
+}
+
+export function makeRenderResult() {
+	return (result: AgentToolResult<Record<string, unknown>>, _opt: unknown, theme: ThemeLike, ctx: RenderContext) => {
+		resolveBaseBackground(theme);
+		const text = ctx.lastComponent ?? new (require("@earendil-works/pi-tui").Text)("", 0, 0);
+		if (ctx.isError) {
+			text.setText(renderToolError(getTextContent(result) || "Error", theme));
+			return text;
+		}
+		const content = getTextContent(result);
+		if (content) {
+			const renderWidth = termWidth();
+			const lines = content.split("\n");
+			const maxShow = ctx.expanded ? lines.length : Math.min(lines.length, MAX_PREVIEW_LINES);
+			const preview = lines.slice(0, maxShow).join("\n");
+			const more = lines.length > maxShow ? `\n${FG_DIM}... ${lines.length - maxShow} more lines${RST}` : "";
+			const metrics = renderToolMetrics(result);
+			text.setText(fillToolBackground(`  ${preview}${more}${metrics ? `\n  ${metrics}` : ""}`, undefined, renderWidth));
+		} else {
+			text.setText(fillToolBackground(`  ${theme.fg("dim", "(no text output)")}`));
+		}
+		return text;
+	};
+}
+
+function getTextContent(result: AgentToolResult<Record<string, unknown>>): string {
+	return (result.content ?? [])
+		.filter((c: any) => c.type === "text")
+		.map((c: any) => c.text ?? "")
+		.join("\n");
+}

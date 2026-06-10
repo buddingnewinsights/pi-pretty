@@ -184,7 +184,7 @@ describe("bash renderCall expansion", () => {
 			});
 
 			const lines = stripAnsi(rendered.getText()).split("\n");
-			expect(lines[0]).toMatch(/^bash false/);
+			expect(lines[1]).toMatch(/^  bash false/);
 		});
 	});
 
@@ -215,7 +215,7 @@ describe("bash renderCall expansion", () => {
 		});
 	});
 
-	it("does not emit internal ANSI background padding or resets for bash results", () => {
+	it("applies tool background correctly to bash results without unnecessary resets", () => {
 		withStdoutColumns(64, () => {
 			const bashTool = loadBashTool();
 			const rendered = bashTool.renderResult(
@@ -234,7 +234,7 @@ describe("bash renderCall expansion", () => {
 				},
 			);
 
-			expect(rendered.getText()).not.toMatch(/\x1b\[48;/);
+			expect(rendered.getText()).toMatch(/\x1b\[48;/); // tool background is applied
 			expect(rendered.getText()).not.toContain("\x1b[0m");
 			expect(rendered.getText()).not.toContain("\x1b[49m");
 			for (const line of rendered.getText().split("\n")) {
