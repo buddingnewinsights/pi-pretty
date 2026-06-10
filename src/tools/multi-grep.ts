@@ -3,7 +3,7 @@
 import { type ToolDefinition, type ExtensionAPI, type ExtensionContext, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { SdkToolDef, GrepDetails, FffServiceWithCursor, TextContent, ComponentLike, ThemeLike, RenderCtxLike } from "../types.js";
-import { resolveBaseBackground, MAX_PREVIEW_LINES, BG_BASE, BG_ERROR, FG_DIM, RST } from "../config.js";
+import { resolveBaseBackground, MAX_PREVIEW_LINES, BG_ERROR, FG_DIM, FG_LNUM, FG_RULE, RST } from "../config.js";
 import { shortPath, normalizeLineEndings } from "../helpers.js";
 import { wrapExecuteWithMetrics } from "./metrics.js";
 import { renderToolError, renderToolMetrics, fillToolBackground } from "../render.js";
@@ -154,7 +154,32 @@ export function registerMultiGrepTool(
 			if (d?._type === "grepResult" && d.text) {
 				const lines = d.text.split("\n");
 				const maxShow = ctx.expanded ? lines.length : Math.min(lines.length, MAX_PREVIEW_LINES);
-				const preview = lines.slice(0, maxShow).map(l => `  ${l}`).join("\n");
+				const show = lines.slice(0, maxShow);
+				const nw = Math.max(3, 5);
+
+				let hlRe: RegExp | null = null;
+				try { hlRe = new RegExp(`(${d.pattern})`, "gi"); } catch {}
+
+				const out: string[] = [];
+				let currentFile = "";
+				for (const line of show) {
+					const fileMatch = line.match(/^(.+?)[:-](\d+)[:-](.*)$/);
+					if (fileMatch) {
+						const [, file, lineNo, content] = fileMatch;
+						if (file !== currentFile) {
+							if (currentFile) out.push("");
+							out.push(`  ${theme.fg("accent", theme.bold(file))}`);
+							currentFile = file;
+						}
+						let display = content;
+						if (hlRe) display = content.replace(hlRe, (m) => `${RST}${theme.fg("accent", theme.bold(m))}${RST}`);
+						const padded = `${FG_LNUM}${String(lineNo).padStart(nw)}${RST} ${FG_RULE}│${RST} ${display}${RST}`;
+						out.push(`  ${padded}`);
+					} else if (line.trim()) {
+						out.push(`  ${FG_DIM}  ${line.trim()}${RST}`);
+					}
+				}
+				const preview = out.join("\n");
 				const more = lines.length > maxShow ? `\n${FG_DIM}  ... ${lines.length - maxShow} more lines${RST}` : "";
 				text.setText(fillToolBackground(`  ${FG_DIM}${d.matchCount} matches${RST}${renderToolMetrics(result)}\n${preview}${more}`));
 				return text;
