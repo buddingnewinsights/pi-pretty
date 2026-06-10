@@ -104,17 +104,17 @@ export function registerReadTool(
 				const cw = Math.max(1, tw - gw);
 
 				const out: string[] = [];
-				out.push(`${FG_RULE}${"─".repeat(tw)}${RST}`);
+				out.push(`  ${FG_RULE}${"─".repeat(tw - 2)}${RST}`);
 				for (let i = 0; i < show.length; i++) {
 					const ln = (d.offset || 0) + i + 1;
 					const code = show[i] ?? "";
 					const display = code.length > cw ? code.slice(0, cw) + `${FG_DIM}›${RST}` : code;
 					const lineNo = String(ln);
-					out.push(`${FG_LNUM}${" ".repeat(Math.max(0, nw - lineNo.length))}${lineNo}${RST} ${FG_RULE}│${RST} ${display}${RST}`);
+					out.push(`  ${FG_LNUM}${" ".repeat(Math.max(0, nw - lineNo.length))}${lineNo}${RST} ${FG_RULE}│${RST} ${display}${RST}`);
 				}
-				out.push(`${FG_RULE}${"─".repeat(tw)}${RST}`);
+				out.push(`  ${FG_RULE}${"─".repeat(tw - 2)}${RST}`);
 				if (total > maxShow) {
-					out.push(`${FG_DIM}  … ${total - maxShow} more lines (${total} total)${RST}`);
+					out.push(`  ${FG_DIM}  … ${total - maxShow} more lines (${total} total)${RST}`);
 				}
 				const rendered = out.join("\n");
 				text.setText(fillToolBackground(rendered));
