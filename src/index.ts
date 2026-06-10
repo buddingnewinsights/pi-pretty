@@ -27,6 +27,7 @@ import { registerGrepTool } from "./tools/grep.js";
 import { registerMultiGrepTool } from "./tools/multi-grep.js";
 import { runMultiGrepRipgrepFallback } from "./multi-grep-fallback.js";
 import { getDefaultAgentDir } from "./config.js";
+import { createFffAutocompleteProvider } from "./autocomplete.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -235,6 +236,11 @@ export default function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrettyDeps)
 		} catch (error: unknown) {
 			ctx.ui?.notify?.(`FFF init failed: ${error instanceof Error ? error.message : String(error)}`, "error");
 		}
+
+		// Register FFF-backed @-mention autocomplete
+		ctx.ui?.addAutocompleteProvider?.((current) =>
+			createFffAutocompleteProvider(current, () => fffService?.getFinder() ?? null),
+		);
 	});
 
 	pi.on("session_shutdown", async () => {
