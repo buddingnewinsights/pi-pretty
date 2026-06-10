@@ -172,7 +172,7 @@ export function registerMultiGrepTool(
 							currentFile = file;
 						}
 						let display = content;
-						if (hlRe) display = content.replace(hlRe, (m) => `${RST}${theme.fg("accent", theme.bold(m))}${RST}`);
+						if (hlRe) display = content.replace(hlRe, (m) => `${RST}${theme.fg("warning", theme.bold(m))}${RST}`);
 						const padded = `${FG_LNUM}${String(lineNo).padStart(nw)}${RST} ${FG_RULE}│${RST} ${display}${RST}`;
 						out.push(`  ${padded}`);
 					} else if (line.trim()) {
