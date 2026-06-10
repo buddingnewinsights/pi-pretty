@@ -73,11 +73,11 @@ export function registerFindTool(
 			const d = result.details as FindDetails | undefined;
 			if (d?._type === "findResult" && d.text) {
 				const rendered = renderFindResults(d.text).split("\n").map(l => `  ${l}`).join("\n");
-				text.setText(fillToolBackground(`  ${FG_DIM}${d.matchCount} files${RST}${renderToolMetrics(result)}\n${rendered}`));
+				text.setText(fillToolBackground(`  ${FG_DIM}${d.matchCount} files${RST}${renderToolMetrics(result)}\n${rendered}\n`));
 				return text;
 			}
 			const fc = result.content?.[0];
-			text.setText(fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "found")}`));
+			text.setText(fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "found")}\n`));
 			return text;
 		},
 	} as unknown as ToolDefinition<any, any, any>);

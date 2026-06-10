@@ -116,14 +116,14 @@ export function registerReadTool(
 				if (total > maxShow) {
 					out.push(`  ${FG_DIM}  … ${total - maxShow} more lines (${total} total)${RST}`);
 				}
-				const rendered = out.join("\n");
+				const rendered = out.join("\n") + "\n";
 				text.setText(fillToolBackground(rendered));
 				(ctx as any).state._rt = rendered;
 				return text;
 			}
 
 			const fc = result.content?.[0];
-			text.setText(fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`));
+			text.setText(fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}\n`));
 			return text;
 		},
 	} as unknown as ToolDefinition<any, any, any>);
