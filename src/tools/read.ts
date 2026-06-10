@@ -2,10 +2,10 @@
 
 import { type ToolDefinition, type ExtensionAPI, type ExtensionContext, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { SdkToolDef, ReadDetails, TextContent, ComponentLike, ThemeLike, RenderCtxLike } from "../types.js";
-import { resolveBaseBackground, termWidth, MAX_PREVIEW_LINES, BG_BASE, BG_ERROR, FG_DIM, RST } from "../config.js";
+import { resolveBaseBackground, termWidth, MAX_PREVIEW_LINES, BG_BASE, BG_ERROR, FG_DIM, FG_LNUM, FG_RULE, RST } from "../config.js";
 import { shortPath, normalizeLineEndings } from "../helpers.js";
 import { wrapExecuteWithMetrics } from "./metrics.js";
-import { renderFindResults, renderToolError, renderToolMetrics, fillToolBackground } from "../render.js";
+import { renderToolError, renderToolMetrics, fillToolBackground } from "../render.js";
 
 // Simple terminal image support check
 function isImageTerminal(): boolean {
@@ -92,9 +92,31 @@ export function registerReadTool(
 				return text;
 			}
 
-			// File content
+			// File content — line-numbered display
 			if (d?._type === "readFile" && d.content) {
-				const rendered = renderFindResults(d.content).split("\n").map(l => `  ${l}`).join("\n");
+				const tw = termWidth();
+				const lines = d.content.split("\n");
+				const total = lines.length;
+				const maxShow = ctx.expanded ? lines.length : Math.min(lines.length, MAX_PREVIEW_LINES);
+				const show = lines.slice(0, maxShow);
+				const nw = Math.max(3, String(total).length);
+				const gw = nw + 3;
+				const cw = Math.max(1, tw - gw);
+
+				const out: string[] = [];
+				out.push(`${FG_RULE}${"─".repeat(tw)}${RST}`);
+				for (let i = 0; i < show.length; i++) {
+					const ln = (d.offset || 0) + i + 1;
+					const code = show[i] ?? "";
+					const display = code.length > cw ? code.slice(0, cw) + `${FG_DIM}›${RST}` : code;
+					const lineNo = String(ln);
+					out.push(`${FG_LNUM}${" ".repeat(Math.max(0, nw - lineNo.length))}${lineNo}${RST} ${FG_RULE}│${RST} ${display}${RST}`);
+				}
+				out.push(`${FG_RULE}${"─".repeat(tw)}${RST}`);
+				if (total > maxShow) {
+					out.push(`${FG_DIM}  … ${total - maxShow} more lines (${total} total)${RST}`);
+				}
+				const rendered = out.join("\n");
 				text.setText(fillToolBackground(rendered));
 				(ctx as any).state._rt = rendered;
 				return text;
