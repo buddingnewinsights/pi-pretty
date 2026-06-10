@@ -51,11 +51,11 @@ export function registerLsTool(
 			const d = result.details as LsDetails | undefined;
 			if (d?._type === "lsResult" && d.text) {
 				const rendered = renderTree(d.text, d.path).split("\n").map(l => `  ${l}`).join("\n");
-				text.setText(fillToolBackground(`  ${FG_DIM}${d.entryCount} entries${RST}${renderToolMetrics(result)}\n${rendered}\n`));
+				text.setText(fillToolBackground(`  ${FG_DIM}${d.entryCount} entries${RST}${renderToolMetrics(result)}\n${rendered}`));
 				return text;
 			}
 			const fc = result.content?.[0];
-			text.setText(fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}\n`));
+			text.setText(fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`));
 			return text;
 		},
 	} as unknown as ToolDefinition<any, any, any>);

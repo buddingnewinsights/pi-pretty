@@ -103,7 +103,7 @@ export function registerGrepTool(
 							currentFile = file;
 						}
 						let display = content;
-						if (hlRe) display = content.replace(hlRe, (m) => `${RST}${theme.fg("warning", theme.bold(m))}${RST}`);
+						if (hlRe) display = content.replace(hlRe, (m) => `${RST}${theme.fg("accent", theme.bold(m))}${RST}`);
 						const padded = `${FG_LNUM}${String(lineNo).padStart(nw)}${RST} ${FG_RULE}│${RST} ${display}${RST}`;
 						out.push(`  ${padded}`);
 					} else if (line.trim()) {
@@ -112,11 +112,11 @@ export function registerGrepTool(
 				}
 				const preview = out.join("\n");
 				const more = lines.length > maxShow ? `\n${FG_DIM}  ... ${lines.length - maxShow} more lines${RST}` : "";
-				text.setText(fillToolBackground(`  ${FG_DIM}${d.matchCount} matches${RST}${renderToolMetrics(result)}\n${preview}${more}\n`));
+				text.setText(fillToolBackground(`  ${FG_DIM}${d.matchCount} matches${RST}${renderToolMetrics(result)}\n${preview}${more}`));
 				return text;
 			}
 			const fc = result.content?.[0];
-			text.setText(fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "no matches")}\n`));
+			text.setText(fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "no matches")}`));
 			return text;
 		},
 	} as unknown as ToolDefinition<any, any, any>);

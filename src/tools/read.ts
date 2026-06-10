@@ -5,7 +5,7 @@ import type { SdkToolDef, ReadDetails, TextContent, ComponentLike, ThemeLike, Re
 import { resolveBaseBackground, termWidth, MAX_PREVIEW_LINES, BG_BASE, BG_ERROR, FG_DIM, FG_LNUM, FG_RULE, RST } from "../config.js";
 import { shortPath, normalizeLineEndings } from "../helpers.js";
 import { wrapExecuteWithMetrics } from "./metrics.js";
-import { renderToolError, renderToolMetrics, fillToolBackground } from "../render.js";
+import { renderToolError, renderToolMetrics, fillToolBackground, renderFileContent } from "../render.js";
 
 // Simple terminal image support check
 function isImageTerminal(): boolean {
@@ -116,14 +116,22 @@ export function registerReadTool(
 				if (total > maxShow) {
 					out.push(`  ${FG_DIM}  … ${total - maxShow} more lines (${total} total)${RST}`);
 				}
-				const rendered = out.join("\n") + "\n";
+				const rendered = out.join("\n");
 				text.setText(fillToolBackground(rendered));
 				(ctx as any).state._rt = rendered;
+
+				// Async syntax highlighting via Shiki
+				renderFileContent(d.content, d.filePath, d.offset || 0, maxShow, tw).then(hl => {
+					const padded = hl.split("\n").map(l => `  ${l}`).join("\n");
+					text.setText(fillToolBackground(padded));
+					(ctx as any).state._rt = padded;
+				}).catch(() => {});
+
 				return text;
 			}
 
 			const fc = result.content?.[0];
-			text.setText(fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}\n`));
+			text.setText(fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`));
 			return text;
 		},
 	} as unknown as ToolDefinition<any, any, any>);

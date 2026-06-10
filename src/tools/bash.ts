@@ -77,12 +77,12 @@ export function registerBashTool(
 				const rw = termWidth();
 
 				const renderFn = (w: number) => {
-					if (!output.trim()) return fillToolBackground(header + "\n", bg, w);
+					if (!output.trim()) return fillToolBackground(header, bg, w);
 					const max = ctx.expanded ? lineCount : MAX_PREVIEW_LINES;
 					const show = output.split("\n").slice(0, max);
 					const out = [header, rule(w), ...show.map((l: string) => `  ${l}`), rule(w)];
 					if (lineCount > max) out.push(`${FG_DIM}  \u2026 ${lineCount - max} more lines${RST}`);
-					return fillToolBackground(out.join("\n") + "\n", bg, w);
+					return fillToolBackground(out.join("\n"), bg, w);
 				};
 
 				text.setText(renderFn(rw));
@@ -103,7 +103,7 @@ export function registerBashTool(
 
 			if (ctx.isError) { text.setText(renderToolError(tc || "Error", theme)); return text; }
 			const fc = result.content?.[0];
-			text.setText(fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}\n`));
+			text.setText(fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`));
 			return text;
 		},
 	} as unknown as ToolDefinition<any, any, any>);
