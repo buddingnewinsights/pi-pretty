@@ -57,9 +57,7 @@ export function registerReadTool(
 			resolveBaseBackground(theme);
 			
 			const text = ctx.lastComponent ?? new TC("", 0, 0);
-			const p = shortPath(cwd, home, String(args.path ?? ""));
-			const off = typeof args.offset === "number" ? `:${args.offset}` : "";
-			text.setText(fillToolBackground(`\n  ${theme.fg("toolTitle", theme.bold("read"))} ${theme.fg("accent", p)}${theme.fg("dim", off)}`, ctx.isError ? BG_ERROR : undefined));
+			text.setText("");
 			return text;
 		},
 
@@ -103,7 +101,10 @@ export function registerReadTool(
 				const gw = nw + 3;
 				const cw = Math.max(1, tw - gw);
 
-				const out: string[] = [];
+				const p2 = shortPath(cwd, home, String(d.filePath ?? ""));
+				const off2 = typeof d.offset === "number" ? `:${d.offset}` : "";
+				const header = `${theme.fg("toolTitle", theme.bold("read"))} ${theme.fg("accent", p2)}${theme.fg("dim", off2)}`;
+				const out: string[] = ["", `  ${header}`];
 				out.push(`  ${FG_RULE}${"─".repeat(tw - 2)}${RST}`);
 				for (let i = 0; i < show.length; i++) {
 					const ln = (d.offset || 0) + i + 1;
@@ -112,10 +113,10 @@ export function registerReadTool(
 					const lineNo = String(ln);
 					out.push(`  ${FG_LNUM}${" ".repeat(Math.max(0, nw - lineNo.length))}${lineNo}${RST} ${FG_RULE}│${RST} ${display}${RST}`);
 				}
-				out.push(`  ${FG_RULE}${"─".repeat(tw - 2)}${RST}`);
 				if (total > maxShow) {
 					out.push(`  ${FG_DIM}  … ${total - maxShow} more lines (${total} total)${RST}`);
 				}
+				out.push("");
 				const rendered = out.join("\n");
 				text.setText(fillToolBackground(rendered));
 				(ctx as any).state._rt = rendered;
@@ -123,8 +124,9 @@ export function registerReadTool(
 				// Async syntax highlighting via Shiki
 				renderFileContent(d.content, d.filePath, d.offset || 0, maxShow, tw).then(hl => {
 					const padded = hl.split("\n").map(l => `  ${l}`).join("\n");
-					text.setText(fillToolBackground(padded));
-					(ctx as any).state._rt = padded;
+					const rendered = `\n  ${header}\n${padded}\n`;
+					text.setText(fillToolBackground(rendered));
+					(ctx as any).state._rt = rendered;
 				}).catch(() => {});
 
 				return text;

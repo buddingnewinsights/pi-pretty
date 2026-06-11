@@ -80,7 +80,7 @@ export function registerBashTool(
 					if (!output.trim()) return fillToolBackground(header, bg, w);
 					const max = ctx.expanded ? lineCount : MAX_PREVIEW_LINES;
 					const show = output.split("\n").slice(0, max);
-					const out = [header, rule(w), ...show.map((l: string) => `  ${l}`), rule(w)];
+					const out = [header, rule(w), ...show.map((l: string) => `  ${l}`)];
 					if (lineCount > max) out.push(`${FG_DIM}  \u2026 ${lineCount - max} more lines${RST}`);
 					return fillToolBackground(out.join("\n"), bg, w);
 				};

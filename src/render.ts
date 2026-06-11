@@ -212,7 +212,6 @@ export async function renderFileContent(
 		out.push(`${lnum(ln, nw)} ${FG_RULE}│${RST} ${display}${RST}`);
 	}
 
-	out.push(rule(tw));
 	if (total > maxLines) {
 		out.push(`${FG_DIM}  … ${total - maxLines} more lines (${total} total)${RST}`);
 	}

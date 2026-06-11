@@ -211,7 +211,6 @@ describe("bash renderCall expansion", () => {
 			expect(lines[3]).toMatch(/^  /);
 			expect(lines[3].trim()).toBe("");
 			expect(lines[4]).toMatch(/^  second error/);
-			expect(lines[5]).toMatch(/^─+$/);
 		});
 	});
 
