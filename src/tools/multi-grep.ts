@@ -136,12 +136,16 @@ export function registerMultiGrepTool(
 
 		renderCall(args: any, theme: ThemeLike, ctx: RenderCtxLike) {
 			resolveBaseBackground(theme);
-			
 			const text = ctx.lastComponent ?? new TC("", 0, 0);
-			const pats = (Array.isArray(args.patterns) ? args.patterns.map(String) : [String(args.patterns ?? "")]);
-			const label = pats.length > 2 ? `${pats[0]}, ${pats[1]}, +${pats.length - 2}` : pats.join(", ");
-			const p = args.path ? ` ${theme.fg("muted", `in ${shortPath(cwd, home, String(args.path))}`)}` : "";
-			text.setText(fillToolBackground(`\n  ${theme.fg("toolTitle", theme.bold("mgrep"))} ${theme.fg("accent", label)}${p}`, ctx.isError ? BG_ERROR : undefined));
+			const patterns: string[] = Array.isArray(args.patterns) ? args.patterns.map((p: unknown) => String(p)) : [];
+			const limit = typeof args.limit === "number" ? args.limit : undefined;
+			const path = args.path === null || args.path === undefined ? "<missing>" : shortPath(cwd, home, String(args.path));
+			const literal = args.literal === true;
+			const patternStr = patterns.length === 0 ? "" : patterns.length === 1 ? patterns[0]! : patterns.length === 2 ? `${patterns[0]}|${patterns[1]}` : `${patterns[0]}|${patterns[1]}|+${patterns.length - 2}`;
+			let out = `${theme.fg("toolTitle", theme.bold("mgrep"))} ${theme.fg("accent", `/${patternStr || ""}/`)}${theme.fg("toolOutput", ` in ${path}`)}`;
+			if (literal) out += theme.fg("dim", ` (literal)`);
+			if (limit !== undefined) out += theme.fg("dim", ` limit ${limit}`);
+			text.setText(fillToolBackground(`\n  ${out}`, ctx.isError ? BG_ERROR : undefined));
 			return text;
 		},
 

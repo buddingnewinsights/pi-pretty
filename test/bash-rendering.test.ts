@@ -130,8 +130,8 @@ describe("bash renderCall expansion", () => {
 			invalidate: () => {},
 		});
 
-		expect(collapsed.getText()).toContain("5s timeout");
-		expect(expanded.getText()).toContain("5s timeout");
+		expect(collapsed.getText()).toContain("(timeout 5s)");
+		expect(expanded.getText()).toContain("(timeout 5s)");
 	});
 
 	it("truncates ANSI tool headers that exceed the terminal width", () => {
@@ -184,7 +184,7 @@ describe("bash renderCall expansion", () => {
 			});
 
 			const lines = stripAnsi(rendered.getText()).split("\n");
-			expect(lines[1]).toMatch(/^  bash false/);
+			expect(lines[1]).toMatch(/^  \$ false/);
 		});
 	});
 

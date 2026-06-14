@@ -37,18 +37,15 @@ export function registerBashTool(
 			}
 		}),
 
-			renderCall(args: any, theme: ThemeLike, ctx: RenderCtxLike) {
+		renderCall(args: any, theme: ThemeLike, ctx: RenderCtxLike) {
 			resolveBaseBackground(theme);
 			const text = ctx.lastComponent ?? new TC("", 0, 0);
-			const t = typeof args.timeout === "number" ? ` ${theme.fg("muted", `(${args.timeout}s timeout)`)}` : "";
+			const t = typeof args.timeout === "number" ? ` ${theme.fg("muted", `(timeout ${args.timeout}s)`)}` : "";
 			const tw = termWidth() || 80;
 			const rawCmd = String(args.command ?? "");
-			const cmd = (() => {
-				const ml = Math.max(1, tw - 20);
-				return rawCmd.length > ml ? rawCmd.slice(0, ml) + "\u2026" : rawCmd;
-			})();
+			const cmd = rawCmd.length === 0 ? theme.fg("toolOutput", "...") : (rawCmd.length > tw - 20 ? rawCmd.slice(0, Math.max(1, tw - 20)) + "…" : rawCmd);
 			const toolWidth = ctx.expanded ? undefined : tw;
-			text.setText(fillToolBackground(`\n  ${theme.fg("toolTitle", theme.bold("bash"))} ${theme.fg("accent", cmd)}${t}`, ctx.isError ? BG_ERROR : undefined, toolWidth));
+			text.setText(fillToolBackground(`\n  ${theme.fg("toolTitle", theme.bold(`$ ${cmd}`))}${t}`, ctx.isError ? BG_ERROR : undefined, toolWidth));
 			return text;
 		},
 

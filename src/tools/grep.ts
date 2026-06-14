@@ -2,11 +2,14 @@
 
 import { type ToolDefinition, type ExtensionAPI, type ExtensionContext, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { SdkToolDef, GrepDetails, FffServiceWithCursor, TextContent, ThemeLike, RenderCtxLike } from "../types.js";
-import { resolveBaseBackground, MAX_PREVIEW_LINES, BG_ERROR, FG_DIM, FG_LNUM, FG_RULE, RST } from "../config.js";
+import { keyHint } from "@earendil-works/pi-coding-agent";
+import { MAX_PREVIEW_LINES, BG_ERROR, resolveBaseBackground } from "../config.js";
 import { shortPath, normalizeLineEndings } from "../helpers.js";
 import { wrapExecuteWithMetrics } from "./metrics.js";
-import { renderToolError, renderToolMetrics, fillToolBackground } from "../render.js";
+import { renderToolError, fillToolBackground } from "../render.js";
 import { fffFormatGrepText } from "../fff-helpers.js";
+
+const invalidArg = "<missing>";
 
 type Result = AgentToolResult<Record<string, unknown>>;
 
@@ -70,9 +73,18 @@ export function registerGrepTool(
 		renderCall(args: any, theme: ThemeLike, ctx: RenderCtxLike) {
 			resolveBaseBackground(theme);
 			const text = ctx.lastComponent ?? new T("", 0, 0);
-			const p = args.path ? ` ${theme.fg("muted", `in ${shortPath(cwd, home, String(args.path))}`)}` : "";
-			const lit = args.literal ? ` ${theme.fg("dim", "[literal]")}` : "";
-			text.setText(fillToolBackground(`\n  ${theme.fg("toolTitle", theme.bold("grep"))} ${theme.fg("accent", String(args.pattern ?? ""))}${p}${lit}`, ctx.isError ? BG_ERROR : undefined));
+			const pattern = args.pattern === null || args.pattern === undefined ? invalidArg : String(args.pattern);
+			const path = args.path === null || args.path === undefined ? invalidArg : shortPath(cwd, home, String(args.path));
+			const glob = args.glob;
+			const limit = args.limit;
+			const literal = args.literal === true;
+			const caseInsensitive = args.caseInsensitive === true || args.ignoreCase === true;
+			let out = `${theme.fg("toolTitle", theme.bold("grep"))} ${theme.fg("accent", `/${pattern || ""}/`)}${theme.fg("toolOutput", ` in ${path}`)}`;
+			if (glob) out += theme.fg("dim", ` (${String(glob)})`);
+			if (limit !== undefined && limit !== null) out += theme.fg("dim", ` limit ${limit}`);
+			if (literal) out += theme.fg("dim", ` (literal)`);
+			if (caseInsensitive) out += theme.fg("dim", ` (case-insensitive)`);
+			text.setText(fillToolBackground(`\n  ${out}`, ctx.isError ? BG_ERROR : undefined));
 			return text;
 		},
 
@@ -85,38 +97,22 @@ export function registerGrepTool(
 				const lines = d.text.split("\n");
 				const maxShow = ctx.expanded ? lines.length : Math.min(lines.length, MAX_PREVIEW_LINES);
 				const show = lines.slice(0, maxShow);
-				const nw = Math.max(3, 5);
-
-				// Build highlight regex from pattern
-				let hlRe: RegExp | null = null;
-				try { hlRe = new RegExp(`(${d.pattern})`, "gi"); } catch {}
-
+				const remaining = lines.length - maxShow;
 				const out: string[] = [];
-				let currentFile = "";
 				for (const line of show) {
-					const fileMatch = line.match(/^(.+?)[:-](\d+)[:-](.*)$/);
-					if (fileMatch) {
-						const [, file, lineNo, content] = fileMatch;
-						if (file !== currentFile) {
-							if (currentFile) out.push("");
-							out.push(`  ${theme.fg("accent", theme.bold(file))}`);
-							currentFile = file;
-						}
-						let display = content;
-						if (hlRe) display = content.replace(hlRe, (m) => `${RST}${theme.fg("warning", theme.bold(m))}${RST}`);
-						const padded = `${FG_LNUM}${String(lineNo).padStart(nw)}${RST} ${FG_RULE}│${RST} ${display}${RST}`;
-						out.push(`  ${padded}`);
-					} else if (line.trim()) {
-						out.push(`  ${FG_DIM}  ${line.trim()}${RST}`);
-					}
+					if (!line) continue;
+					out.push(theme.fg("toolOutput", line));
 				}
-				const preview = out.join("\n");
-				const more = lines.length > maxShow ? `\n${FG_DIM}  ... ${lines.length - maxShow} more lines${RST}` : "";
-				text.setText(fillToolBackground(`  ${FG_DIM}${d.matchCount} matches${RST}${renderToolMetrics(result)}\n${preview}${more}`));
+				if (remaining > 0) {
+					out.push(theme.fg("muted", `… (${remaining} more ${remaining === 1 ? "line" : "lines"}, ${keyHint("app.tools.expand", "to expand")})`));
+				}
+				const body = out.map((l) => `  ${l}`).join("\n") + "\n\n";
+				text.setText(fillToolBackground(body, ctx.isError ? BG_ERROR : undefined));
 				return text;
 			}
 			const fc = result.content?.[0];
-			text.setText(fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "no matches")}`));
+			const fallback = fc && "text" in fc ? String(fc.text).slice(0, 120) : "no matches";
+			text.setText(fillToolBackground(`  ${theme.fg("dim", fallback)}`, ctx.isError ? BG_ERROR : undefined));
 			return text;
 		},
 	} as unknown as ToolDefinition<any, any, any>);

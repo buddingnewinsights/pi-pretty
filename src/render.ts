@@ -184,36 +184,21 @@ export function renderToolError(error: string, theme: ThemeLike): string {
 export async function renderFileContent(
 	content: string,
 	filePath: string,
-	offset = 1,
+	offset = 0,
 	maxLines = MAX_PREVIEW_LINES,
 	width?: number,
 ): Promise<string> {
 	const normalizedContent = normalizeLineEndings(content);
 	const lines = normalizedContent.split("\n");
-	const total = lines.length;
 	const show = lines.slice(0, maxLines);
 	const lg = detectLang(filePath);
 	const hl = await hlBlock(show.join("\n"), lg);
 
 	const tw = width ?? termWidth();
-	const startLine = offset;
-	const endLine = startLine + show.length - 1;
-	const nw = Math.max(3, String(endLine).length);
-	const gw = nw + 3;
-	const cw = Math.max(1, tw - gw);
 
 	const out: string[] = [];
-	out.push(rule(tw));
-
-	for (let i = 0; i < hl.length; i++) {
-		const ln = startLine + i;
-		const code = hl[i] ?? show[i] ?? "";
-		const display = truncateToWidth(code, cw, `${FG_DIM}›`);
-		out.push(`${lnum(ln, nw)} ${FG_RULE}│${RST} ${display}${RST}`);
-	}
-
-	if (total > maxLines) {
-		out.push(`${FG_DIM}  … ${total - maxLines} more lines (${total} total)${RST}`);
+	for (const line of hl) {
+		out.push(truncateToWidth(line ?? "", Math.max(1, tw), `${FG_DIM}›`));
 	}
 	return out.join("\n");
 }
@@ -270,44 +255,44 @@ export function renderTree(text: string, _basePath: string): string {
 	return out.join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// Find — grouped file list with icons
-// ---------------------------------------------------------------------------
-
-export function renderFindResults(text: string): string {
-	const lines = text.trim().split("\n").filter(Boolean);
-	if (!lines.length) return `${FG_DIM}(no matches)${RST}`;
-
-	const groups = new Map<string, string[]>();
-	for (const line of lines) {
-		const trimmed = line.trim();
-		const dir = dirname(trimmed) || ".";
-		const file = basename(trimmed);
-		if (!groups.has(dir)) groups.set(dir, []);
-		const bucket = groups.get(dir);
-		if (bucket) bucket.push(file);
-	}
-
-	const out: string[] = [];
-	let count = 0;
-
-	for (const [dir, files] of groups) {
-		if (count > 0) out.push("");
-		out.push(`${dirIcon()}${FG_BLUE}\x1b[1m${dir}/${RST}`);
-		for (let i = 0; i < files.length; i++) {
-			if (count >= MAX_PREVIEW_LINES) {
-				out.push(`  ${FG_DIM}… ${lines.length - count} more files${RST}`);
-				return out.join("\n");
-			}
-			const isLast = i === files.length - 1;
-			const prefix = isLast ? "└── " : "├── ";
-			out.push(`  ${FG_RULE}${prefix}${RST}${files[i]}`);
-			count++;
-		}
-	}
-
-	return out.join("\n");
-}
+    // ---------------------------------------------------------------------------
+    // Find — grouped file list (plain, no tree characters or icons)
+    // ---------------------------------------------------------------------------
+    
+    export function renderFindResults(text: string, theme?: ThemeLike): string {
+    	const lines = text.trim().split("\n").filter(Boolean);
+    	if (!lines.length) return theme ? theme.fg("dim", "(no matches)") : `${FG_DIM}(no matches)${RST}`;
+    
+    	const groups = new Map<string, string[]>();
+    	for (const line of lines) {
+    		const trimmed = line.trim();
+    		const dir = dirname(trimmed) || ".";
+    		const file = basename(trimmed);
+    		if (!groups.has(dir)) groups.set(dir, []);
+    		const bucket = groups.get(dir);
+    		if (bucket) bucket.push(file);
+    	}
+    
+    	const out: string[] = [];
+    	let count = 0;
+    
+    	for (const [dir, files] of groups) {
+    		if (count > 0) out.push("");
+    		const dirColored = theme ? theme.fg("accent", theme.bold(`${dir}/`)) : `${FG_BLUE}\x1b[1m${dir}/${RST}`;
+    		out.push(dirColored);
+    		for (let i = 0; i < files.length; i++) {
+    			if (count >= MAX_PREVIEW_LINES) {
+    				const more = theme ? theme.fg("dim", `… ${lines.length - count} more files`) : `${FG_DIM}… ${lines.length - count} more files${RST}`;
+    				out.push(`  ${more}`);
+    				return out.join("\n");
+    			}
+    		out.push(`  ${files[i]}`);
+    		count++;
+    	}
+    	}
+    
+            	return out.join("\n");
+            }
 
 // ---------------------------------------------------------------------------
 // Grep — highlighted matches with line numbers
