@@ -94,23 +94,10 @@ export default function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrettyDeps)
 
 	const agentDir = getAgentDir ? getAgentDir() : getDefaultAgentDir();
 
-	let fffService: FffService | null = null;
+	let fffService: FffService | null = new FffService(undefined, agentDir);
 
 	if (deps?.fffModule) {
 		fffService = new FffService(deps.fffModule, agentDir);
-	} else if (!deps) {
-		// Production: try to load FFF module
-			try {
-				const fffMod = require("@ff-labs/fff-node");
-			fffService = new FffService(fffMod, agentDir);
-		} catch {
-			// Dynamic import fallback (ESM-only package)
-			import("@ff-labs/fff-node").then((mod) => {
-				if (!fffService) {
-					fffService = new FffService(mod, agentDir);
-				}
-			}).catch(() => {});
-		}
 	}
 
 	// Ripgrep fallback for multi_grep
