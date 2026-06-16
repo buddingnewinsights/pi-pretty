@@ -1,6 +1,12 @@
 {
 	"name": "@heyhuynhgiabuu/pi-pretty",
-	"version": "0.6.4",
+	"version": "0.6.5",
+	"files": [
+		"dist/",
+		"CHANGELOG.md",
+		"src/"
+	],
+	"main": "dist/index.js",
 	"description": "Pretty terminal output for pi — syntax-highlighted file reads, colored bash output, tree-view directory listings, and more.",
 	"author": "huynhgiabuu",
 	"license": "MIT",

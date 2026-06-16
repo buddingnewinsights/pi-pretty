@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.5] - 2026-06-16
+
+### Fixed
+
+- **npm package missing dist/** — `.gitignore` excluded `dist/` from the published
+  npm package (`dist/` is in `.gitignore`, which npm uses as `.npmignore` by default
+  when no `.npmignore` exists). Pi could only see TypeScript source files, not compiled
+  JavaScript. The extension loaded but FFF service never initialized.
+
+  Fix: added `"files": ["dist/", "CHANGELOG.md", "src/"]` and `"main": "dist/index.js"`
+  to package.json to explicitly include compiled output in the published package.
+
 ## [0.6.4] - 2026-06-16
 
 ### Fixed
