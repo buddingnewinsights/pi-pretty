@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.10] - 2026-06-21
+
+### Fixed
+
+- **Published npm extension did not register pretty tools or FFF commands** — the
+  extension dynamically imports `@earendil-works/pi-coding-agent` at activation time
+  to build the wrapped built-in tool definitions. Local development had that package
+  from `devDependencies`, but isolated Pi npm extension installs only install runtime
+  dependencies. The activation import failed, so published installs could silently
+  skip registering `find`, `grep`, `/fff-health`, `/fff-rescan`, and FFF indexing.
+
+  Fix: moved `@earendil-works/pi-coding-agent` into runtime dependencies so clean
+  published npm installs can activate the extension the same way local installs do.
+
 ## [0.6.9] - 2026-06-21
 
 ### Fixed
