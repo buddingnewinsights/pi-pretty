@@ -10,7 +10,7 @@
  */
 
 // Re-export for tests
- export { __imageInternals } from "./image.js";
+export { __imageInternals } from "./image.js";
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -48,7 +48,7 @@ function envDisabledTools(): Set<string> {
 
 export type { PiPrettyDeps };
 
-export default function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrettyDeps): void {
+export default async function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrettyDeps): Promise<void> {
 	const disabledTools = envDisabledTools();
 	const isToolEnabled = (name: string) => !disabledTools.has(name.toLowerCase());
 	const cwd = process.cwd();
@@ -75,7 +75,11 @@ export default function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrettyDeps)
 		getAgentDir = sdk.getAgentDir;
 	} else {
 		try {
-			sdk = require("@earendil-works/pi-coding-agent");
+			// Dynamic import() uses ESM resolution (not CJS interop), so it
+			// correctly resolves subpath exports like @earendil-works/pi-ai/base
+			// which only have "import" conditions in their exports map.
+			const mod = await import("@earendil-works/pi-coding-agent");
+			sdk = mod;
 			createReadTool = sdk.createReadToolDefinition ?? sdk.createReadTool;
 			createBashTool = sdk.createBashToolDefinition ?? sdk.createBashTool;
 			createLsTool = sdk.createLsToolDefinition ?? sdk.createLsTool;
@@ -127,7 +131,9 @@ export default function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrettyDeps)
 	}
 	if (isToolEnabled("multi_grep") && (fffService || createGrepTool)) {
 		registerMultiGrepTool(
-			pi, cwd, fffService,
+			pi,
+			cwd,
+			fffService,
 			createGrepTool ? createGrepTool(cwd) : undefined,
 			multiGrepFallback,
 			TextComp,
@@ -168,7 +174,9 @@ export default function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrettyDeps)
 				];
 				const progress = finder.getScanProgress();
 				if (progress.ok) {
-					lines.push(`Scanning: ${progress.value.isScanning ? "yes" : "no"} (${progress.value.scannedFilesCount} files)`);
+					lines.push(
+						`Scanning: ${progress.value.isScanning ? "yes" : "no"} (${progress.value.scannedFilesCount} files)`,
+					);
 				}
 				ctx.ui.notify(lines.join("\n"), "info");
 			},
@@ -237,21 +245,21 @@ export default function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrettyDeps)
 	// Fallback padding for SDK-rendered tool bodies. The SDK reads
 	// result.content[0].text and slices collapsed output to roughly the first
 	// 10 lines, so insert bottom padding inside that visible slice.
-    	const PADDED_TOOLS = new Set(["read", "grep", "bash"]);
-    	const RESULT_LEFT_PAD = "    ";
-    	const BOTTOM_PADDING_BY_TOOL: Record<string, number> = { read: 2, grep: 2, bash: 0 };
-    	pi.on("tool_result", (event, _ctx) => {
-    		if (!PADDED_TOOLS.has(event.toolName)) return undefined;
-    		const first = event.content[0];
-    		if (!first || first.type !== "text") return undefined;
-    		const lines = first.text.split("\n").map((line) => `${RESULT_LEFT_PAD}${line}`);
-    		if (lines.length === 0) return undefined;
+	const PADDED_TOOLS = new Set(["read", "grep", "bash"]);
+	const RESULT_LEFT_PAD = "    ";
+	const BOTTOM_PADDING_BY_TOOL: Record<string, number> = { read: 2, grep: 2, bash: 0 };
+	pi.on("tool_result", (event, _ctx) => {
+		if (!PADDED_TOOLS.has(event.toolName)) return undefined;
+		const first = event.content[0];
+		if (!first || first.type !== "text") return undefined;
+		const lines = first.text.split("\n").map((line) => `${RESULT_LEFT_PAD}${line}`);
+		if (lines.length === 0) return undefined;
 
-    		const padCount = BOTTOM_PADDING_BY_TOOL[event.toolName] ?? 0;
-    		lines.push(...Array.from({ length: padCount }, () => RESULT_LEFT_PAD));
+		const padCount = BOTTOM_PADDING_BY_TOOL[event.toolName] ?? 0;
+		lines.push(...Array.from({ length: padCount }, () => RESULT_LEFT_PAD));
 
-    		return {
-    			content: [{ type: "text" as const, text: lines.join("\n") }, ...event.content.slice(1)],
-    		};
-    	});
+		return {
+			content: [{ type: "text" as const, text: lines.join("\n") }, ...event.content.slice(1)],
+		};
+	});
 }

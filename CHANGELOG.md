@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.6] - 2026-06-21
+
+### Fixed
+
+- **Extension load failure via jiti CJS interop** — When pi loads `pi-pretty` as
+  an extension, it uses jiti as the module loader. `pi-pretty`'s SDK fallback used
+  synchronous `require("@earendil-works/pi-coding-agent")` which triggers jiti's
+  CJS interop for ESM modules. The pi-ai package only has `"import"` conditions in
+  its `exports` map for subpath exports like `./base`. CJS resolution can't match
+  `"import"` conditions and falls back to legacy resolution — treating the main
+  entry `./dist/index.js` as a directory and appending `/base`, resulting in:
+  `Cannot find module '.../pi-ai/dist/index.js/base'`.
+
+  Fix: replaced `require()` with `await import()` (dynamic ESM import), which
+  correctly resolves ESM subpath exports through the package's `exports` map.
+  The function signature was changed to `async` to support this.
+
 ## [0.6.5] - 2026-06-16
 
 ### Fixed
