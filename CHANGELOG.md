@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.8] - 2026-06-21
+
+### Fixed
+
+- **Tool registration crash when pi-tui not aliased** — Every tool file had an
+  **IIFE** that eagerly called `require("@earendil-works/pi-tui")` during tool
+  registration. In pi installations that don't alias pi-tui (e.g. `pikit` project),
+  this crashed the extension before it could load.
+
+  Fix: introduced `src/tui-text.ts` with a lazy `resolveTextCtor()` function that
+  catches the missing-module error and returns a no-op stub Text class. All six
+  tool files (`bash.ts`, `find.ts`, `grep.ts`, `ls.ts`, `multi-grep.ts`,
+  `read.ts`) now use this instead of the eager IIFE.
+
 ## [0.6.7] - 2026-06-21
 
 ### Fixed

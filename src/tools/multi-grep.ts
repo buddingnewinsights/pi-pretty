@@ -1,12 +1,26 @@
 /* pi-pretty: multi_grep tool -- FFF-backed multi-pattern search with ripgrep/SDK fallback. */
 
-import { type ToolDefinition, type ExtensionAPI, type ExtensionContext, type AgentToolResult } from "@earendil-works/pi-coding-agent";
+import {
+	type ToolDefinition,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type AgentToolResult,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { SdkToolDef, GrepDetails, FffServiceWithCursor, TextContent, ComponentLike, ThemeLike, RenderCtxLike } from "../types.js";
+import type {
+	SdkToolDef,
+	GrepDetails,
+	FffServiceWithCursor,
+	TextContent,
+	ComponentLike,
+	ThemeLike,
+	RenderCtxLike,
+} from "../types.js";
 import { resolveBaseBackground, MAX_PREVIEW_LINES, BG_ERROR, FG_DIM, FG_LNUM, FG_RULE, RST } from "../config.js";
 import { shortPath, normalizeLineEndings } from "../helpers.js";
 import { wrapExecuteWithMetrics } from "./metrics.js";
 import { renderToolError, renderToolMetrics, fillToolBackground } from "../render.js";
+import { resolveTextCtor } from "../tui-text.js";
 import { fffFormatGrepText } from "../fff-helpers.js";
 import { parseMultiGrepConstraints } from "../multi-grep-fallback.js";
 import { NOTICE_PARTIAL_FILE_INDEX } from "../notices.js";
@@ -14,7 +28,11 @@ import type { MultiGrepFallback } from "../types.js";
 
 type Result = AgentToolResult<Record<string, unknown>>;
 
-const noopFallback: MultiGrepFallback = async () => ({ text: "", matchCount: 0, limitReached: false });
+const noopFallback: MultiGrepFallback = async () => ({
+	text: "",
+	matchCount: 0,
+	limitReached: false,
+});
 
 export function registerMultiGrepTool(
 	pi: ExtensionAPI,
@@ -24,17 +42,14 @@ export function registerMultiGrepTool(
 	ripgrepFallback: MultiGrepFallback = noopFallback,
 	TextComp?: new (t?: string, x?: number, y?: number) => { setText(v: string): void },
 ): void {
-	const TC = TextComp ?? (() => {
-		const { Text } = require("@earendil-works/pi-tui") as { Text: new (t?: string, x?: number, y?: number) => { setText(v: string): void } };
-		return Text;
-	})();
+	const TC = resolveTextCtor(TextComp);
 	const home = process.env.HOME ?? "";
 
 	pi.registerTool({
 		name: "multi_grep",
 		label: "Multi Grep",
 		description: "Search file contents using multiple patterns (OR logic)",
-	parameters: Type.Object({
+		parameters: Type.Object({
 			patterns: Type.Array(Type.String()),
 			path: Type.Optional(Type.String()),
 			constraints: Type.Optional(Type.String()),
@@ -49,12 +64,18 @@ export function registerMultiGrepTool(
 
 			// Guard: empty patterns
 			if (!patterns.length || (patterns.length === 1 && !patterns[0])) {
-				return { content: [{ text: "patterns array must have at least 1 element", type: "text" as const }], details: { _type: "grepResult" } as GrepDetails };
+				return {
+					content: [{ text: "patterns array must have at least 1 element", type: "text" as const }],
+					details: { _type: "grepResult" } as GrepDetails,
+				};
 			}
 
 			// Guard: aborted signal
 			if (sig?.aborted) {
-				return { content: [{ text: "Aborted", type: "text" as const }], details: { _type: "grepResult" } as GrepDetails };
+				return {
+					content: [{ text: "Aborted", type: "text" as const }],
+					details: { _type: "grepResult" } as GrepDetails,
+				};
 			}
 			const constraintsStr = p.constraints ? String(p.constraints) : undefined;
 			const context = typeof p.context === "number" ? p.context : undefined;
@@ -92,32 +113,83 @@ export function registerMultiGrepTool(
 							notices.push(`More results available: cursor="${cursorId}"`);
 						}
 						const text = appendNotices(fffFormatGrepText(items, effectiveLimit), notices);
-						return { content: [{ type: "text" as const, text }], details: { _type: "grepResult", text, pattern: alternationPattern, matchCount: items.length } as GrepDetails };
+						return {
+							content: [{ type: "text" as const, text }],
+							details: {
+								_type: "grepResult",
+								text,
+								pattern: alternationPattern,
+								matchCount: items.length,
+							} as GrepDetails,
+						};
 					}
 					// FFF failure -> return error directly
-					return { content: [{ type: "text" as const, text: grepResult.error || "multi_grep failed" }], details: { _type: "grepResult", text: "", pattern: alternationPattern, matchCount: 0 } as GrepDetails };
-				} catch { /* fall through */ }
+					return {
+						content: [{ type: "text" as const, text: grepResult.error || "multi_grep failed" }],
+						details: {
+							_type: "grepResult",
+							text: "",
+							pattern: alternationPattern,
+							matchCount: 0,
+						} as GrepDetails,
+					};
+				} catch {
+					/* fall through */
+				}
 			}
 
 			// 2. Ripgrep fallback
 			if (requestedConstraints || !sdkGrepTool) {
 				try {
-					const pathBacked = Boolean(requestedConstraints && requestedPath && !Boolean(p.path) && !requestedConstraints.includes("*") && !requestedConstraints.includes("?"));
-			const constraintsForRg = pathBacked ? undefined : requestedConstraints;
+					const pathBacked = Boolean(
+						requestedConstraints &&
+							requestedPath &&
+							!Boolean(p.path) &&
+							!requestedConstraints.includes("*") &&
+							!requestedConstraints.includes("?"),
+					);
+					const constraintsForRg = pathBacked ? undefined : requestedConstraints;
 					const notices: string[] = [];
 					if (!fffService?.isAvailable) notices.push("FFF unavailable, used ripgrep fallback");
 					else if (hasNativeConstraints) notices.push("Used ripgrep fallback for constrained search");
 					else notices.push("Used ripgrep fallback");
 
 					const rgResult = await ripgrepFallback({
-						cwd, patterns, path: effectivePath, constraints: constraintsForRg,
-						ignoreCase: shouldIgnoreCase(patterns), context, limit: effectiveLimit, signal: sig,
+						cwd,
+						patterns,
+						path: effectivePath,
+						constraints: constraintsForRg,
+						ignoreCase: shouldIgnoreCase(patterns),
+						context,
+						limit: effectiveLimit,
+						signal: sig,
 					});
 					const text = normalizeLineEndings(rgResult.text) || "No matches found";
 					if (rgResult.limitReached) notices.push(`${effectiveLimit} limit reached`);
-					return { content: [{ type: "text" as const, text: appendNotices(text, notices) }], details: { _type: "grepResult", text, pattern: alternationPattern, matchCount: rgResult.matchCount } as GrepDetails };
+					return {
+						content: [{ type: "text" as const, text: appendNotices(text, notices) }],
+						details: {
+							_type: "grepResult",
+							text,
+							pattern: alternationPattern,
+							matchCount: rgResult.matchCount,
+						} as GrepDetails,
+					};
 				} catch (error: unknown) {
-					return { content: [{ type: "text" as const, text: `multi_grep error: ${error instanceof Error ? error.message : String(error)}` }], details: { _type: "grepResult", text: "", pattern: alternationPattern, matchCount: 0 } as GrepDetails };
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: `multi_grep error: ${error instanceof Error ? error.message : String(error)}`,
+							},
+						],
+						details: {
+							_type: "grepResult",
+							text: "",
+							pattern: alternationPattern,
+							matchCount: 0,
+						} as GrepDetails,
+					};
 				}
 			}
 
@@ -125,13 +197,43 @@ export function registerMultiGrepTool(
 			try {
 				const notices: string[] = [];
 				if (!fffService?.isAvailable) notices.push("FFF unavailable, used SDK grep fallback");
-				const result = await sdkGrepTool.execute(tid, { pattern: alternationPattern, path: effectivePath, ignoreCase: shouldIgnoreCase(patterns), context, limit: effectiveLimit }, sig, null, ctx) as Result;
+				const result = (await sdkGrepTool.execute(
+					tid,
+					{
+						pattern: alternationPattern,
+						path: effectivePath,
+						ignoreCase: shouldIgnoreCase(patterns),
+						context,
+						limit: effectiveLimit,
+					},
+					sig,
+					null,
+					ctx,
+				)) as Result;
 				const tc = getText(result);
 				result.content = [{ type: "text" as const, text: appendNotices(tc, notices) }];
-				result.details = { _type: "grepResult", text: tc, pattern: alternationPattern, matchCount: tc ? tc.trim().split("\n").filter(Boolean).length : 0 } as GrepDetails;
+				result.details = {
+					_type: "grepResult",
+					text: tc,
+					pattern: alternationPattern,
+					matchCount: tc ? tc.trim().split("\n").filter(Boolean).length : 0,
+				} as GrepDetails;
 				return result;
 			} catch (error: unknown) {
-				return { content: [{ type: "text" as const, text: `multi_grep error: ${error instanceof Error ? error.message : String(error)}` }], details: { _type: "grepResult", text: "", pattern: alternationPattern, matchCount: 0 } as GrepDetails };
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `multi_grep error: ${error instanceof Error ? error.message : String(error)}`,
+						},
+					],
+					details: {
+						_type: "grepResult",
+						text: "",
+						pattern: alternationPattern,
+						matchCount: 0,
+					} as GrepDetails,
+				};
 			}
 		}),
 
@@ -140,9 +242,17 @@ export function registerMultiGrepTool(
 			const text = ctx.lastComponent ?? new TC("", 0, 0);
 			const patterns: string[] = Array.isArray(args.patterns) ? args.patterns.map((p: unknown) => String(p)) : [];
 			const limit = typeof args.limit === "number" ? args.limit : undefined;
-			const path = args.path === null || args.path === undefined ? "<missing>" : shortPath(cwd, home, String(args.path));
+			const path =
+				args.path === null || args.path === undefined ? "<missing>" : shortPath(cwd, home, String(args.path));
 			const literal = args.literal === true;
-			const patternStr = patterns.length === 0 ? "" : patterns.length === 1 ? patterns[0]! : patterns.length === 2 ? `${patterns[0]}|${patterns[1]}` : `${patterns[0]}|${patterns[1]}|+${patterns.length - 2}`;
+			const patternStr =
+				patterns.length === 0
+					? ""
+					: patterns.length === 1
+						? patterns[0]!
+						: patterns.length === 2
+							? `${patterns[0]}|${patterns[1]}`
+							: `${patterns[0]}|${patterns[1]}|+${patterns.length - 2}`;
 			let out = `${theme.fg("toolTitle", theme.bold("mgrep"))} ${theme.fg("accent", `/${patternStr || ""}/`)}${theme.fg("toolOutput", ` in ${path}`)}`;
 			if (literal) out += theme.fg("dim", ` (literal)`);
 			if (limit !== undefined) out += theme.fg("dim", ` limit ${limit}`);
@@ -152,9 +262,12 @@ export function registerMultiGrepTool(
 
 		renderResult(result: Result, _opt: unknown, theme: ThemeLike, ctx: RenderCtxLike) {
 			resolveBaseBackground(theme);
-			
+
 			const text = ctx.lastComponent ?? new TC("", 0, 0);
-			if (ctx.isError) { text.setText(renderToolError(getText(result) || "Error", theme)); return text; }
+			if (ctx.isError) {
+				text.setText(renderToolError(getText(result) || "Error", theme));
+				return text;
+			}
 			const d = result.details as GrepDetails | undefined;
 			if (d?._type === "grepResult" && d.text) {
 				const lines = d.text.split("\n");
@@ -163,7 +276,9 @@ export function registerMultiGrepTool(
 				const nw = Math.max(3, 5);
 
 				let hlRe: RegExp | null = null;
-				try { hlRe = new RegExp(`(${d.pattern})`, "gi"); } catch {}
+				try {
+					hlRe = new RegExp(`(${d.pattern})`, "gi");
+				} catch {}
 
 				const out: string[] = [];
 				let currentFile = "";
@@ -186,16 +301,31 @@ export function registerMultiGrepTool(
 				}
 				const preview = out.join("\n");
 				const more = lines.length > maxShow ? `\n${FG_DIM}  ... ${lines.length - maxShow} more lines${RST}` : "";
-				text.setText(fillToolBackground(`  ${FG_DIM}${d.matchCount} matches${RST}${renderToolMetrics(result)}\n${preview}${more}`));
+				text.setText(
+					fillToolBackground(`  ${FG_DIM}${d.matchCount} matches${RST}${renderToolMetrics(result)}\n${preview}${more}`),
+				);
 				return text;
 			}
 			const fc = result.content?.[0];
-			text.setText(fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "no matches")}`));
+			text.setText(
+				fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "no matches")}`),
+			);
 			return text;
 		},
 	} as unknown as ToolDefinition<any, any, any>);
 }
 
-function shouldIgnoreCase(patterns: string[]): boolean { return !patterns.some((p) => /[A-Z]/.test(p)); }
-function appendNotices(text: string, notices: string[]): string { return notices.length ? `${text}\n\n[${notices.join(". ")}]` : text; }
-function getText(result: Result): string { return ((result.content ?? []) as TextContent[]).filter((c) => c.type === "text").map((c) => c.text).join("\n") ?? ""; }
+function shouldIgnoreCase(patterns: string[]): boolean {
+	return !patterns.some((p) => /[A-Z]/.test(p));
+}
+function appendNotices(text: string, notices: string[]): string {
+	return notices.length ? `${text}\n\n[${notices.join(". ")}]` : text;
+}
+function getText(result: Result): string {
+	return (
+		((result.content ?? []) as TextContent[])
+			.filter((c) => c.type === "text")
+			.map((c) => c.text)
+			.join("\n") ?? ""
+	);
+}

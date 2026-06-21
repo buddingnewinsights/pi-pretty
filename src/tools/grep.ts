@@ -11,6 +11,7 @@ import { MAX_PREVIEW_LINES, BG_ERROR, resolveBaseBackground } from "../config.js
 import { shortPath, normalizeLineEndings } from "../helpers.js";
 import { wrapExecuteWithMetrics } from "./metrics.js";
 import { renderToolError, fillToolBackground } from "../render.js";
+import { resolveTextCtor } from "../tui-text.js";
 import { fffFormatGrepText } from "../fff-helpers.js";
 import { NOTICE_PARTIAL_FILE_INDEX } from "../notices.js";
 
@@ -25,14 +26,7 @@ export function registerGrepTool(
 	sdkTool: SdkToolDef,
 	TextComp?: new (t?: string, x?: number, y?: number) => { setText(v: string): void },
 ): void {
-	const T =
-		TextComp ??
-		(() => {
-			const m = require("@earendil-works/pi-tui") as {
-				Text: new (t?: string, x?: number, y?: number) => { setText(v: string): void };
-			};
-			return m.Text;
-		})();
+	const T = resolveTextCtor(TextComp);
 	const home = process.env.HOME ?? "";
 
 	pi.registerTool({

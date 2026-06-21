@@ -1,11 +1,27 @@
 /* pi-pretty: read tool -- file reading with syntax highlighting and inline image support. */
 
-import { type ToolDefinition, type ExtensionAPI, type ExtensionContext, type AgentToolResult } from "@earendil-works/pi-coding-agent";
+import {
+	type ToolDefinition,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type AgentToolResult,
+} from "@earendil-works/pi-coding-agent";
 import type { SdkToolDef, ReadDetails, TextContent, ComponentLike, ThemeLike, RenderCtxLike } from "../types.js";
-import { resolveBaseBackground, termWidth, MAX_PREVIEW_LINES, BG_BASE, BG_ERROR, FG_DIM, FG_LNUM, FG_RULE, RST } from "../config.js";
+import {
+	resolveBaseBackground,
+	termWidth,
+	MAX_PREVIEW_LINES,
+	BG_BASE,
+	BG_ERROR,
+	FG_DIM,
+	FG_LNUM,
+	FG_RULE,
+	RST,
+} from "../config.js";
 import { shortPath, normalizeLineEndings } from "../helpers.js";
 import { wrapExecuteWithMetrics } from "./metrics.js";
 import { renderToolError, renderToolMetrics, fillToolBackground, renderFileContent } from "../render.js";
+import { resolveTextCtor } from "../tui-text.js";
 
 // Simple terminal image support check
 function isImageTerminal(): boolean {
@@ -13,7 +29,10 @@ function isImageTerminal(): boolean {
 	const proto = (process.env.PRETTY_IMAGE_PROTOCOL ?? "").toLowerCase();
 	if (proto === "kitty" || proto === "iterm2") return true;
 	if (proto === "none") return false;
-	return ["ghostty", "kitty", "iterm.app", "wezterm", "mintty"].some((t) => term.includes(t)) || process.env.LC_TERMINAL === "iTerm2";
+	return (
+		["ghostty", "kitty", "iterm.app", "wezterm", "mintty"].some((t) => term.includes(t)) ||
+		process.env.LC_TERMINAL === "iTerm2"
+	);
 }
 
 type Result = AgentToolResult<Record<string, unknown>>;
@@ -25,10 +44,7 @@ export function registerReadTool(
 	sdkTool: SdkToolDef,
 	TextComp?: new (t?: string, x?: number, y?: number) => { setText(v: string): void },
 ): void {
-	const TC = TextComp ?? (() => {
-		const { Text } = require("@earendil-works/pi-tui") as { Text: new (t?: string, x?: number, y?: number) => { setText(v: string): void } };
-		return Text;
-	})();
+	const TC = resolveTextCtor(TextComp);
 	const home = process.env.HOME ?? "";
 
 	pi.registerTool({
@@ -40,22 +56,33 @@ export function registerReadTool(
 
 		execute: wrapExecuteWithMetrics(async (tid, params, sig, _upd, ctx: ExtensionContext) => {
 			const p = params as any;
-			const result = await sdkTool.execute(tid, p, sig, undefined, ctx) as Result;
+			const result = (await sdkTool.execute(tid, p, sig, undefined, ctx)) as Result;
 
 			const imageBlock = (result.content as any[])?.find((c: any) => c.type === "image");
 			if (imageBlock) {
-				result.details = { _type: "readImage", filePath: String(p.path ?? ""), data: imageBlock.data, mimeType: imageBlock.mimeType ?? "image/png" } as ReadDetails;
+				result.details = {
+					_type: "readImage",
+					filePath: String(p.path ?? ""),
+					data: imageBlock.data,
+					mimeType: imageBlock.mimeType ?? "image/png",
+				} as ReadDetails;
 				return result;
 			}
 
 			const tc = normalizeLineEndings(getText(result));
-			result.details = { _type: "readFile", filePath: String(p.path ?? ""), content: tc, offset: typeof p.offset === "number" ? p.offset : 0, lineCount: tc ? tc.split("\n").length : 0 } as ReadDetails;
+			result.details = {
+				_type: "readFile",
+				filePath: String(p.path ?? ""),
+				content: tc,
+				offset: typeof p.offset === "number" ? p.offset : 0,
+				lineCount: tc ? tc.split("\n").length : 0,
+			} as ReadDetails;
 			return result;
 		}),
 
 		renderCall(args: any, theme: ThemeLike, ctx: RenderCtxLike) {
 			resolveBaseBackground(theme);
-			
+
 			const text = ctx.lastComponent ?? new TC("", 0, 0);
 			text.setText("");
 			return text;
@@ -63,10 +90,13 @@ export function registerReadTool(
 
 		renderResult(result: Result, _opt: unknown, theme: ThemeLike, ctx: RenderCtxLike) {
 			resolveBaseBackground(theme);
-			
+
 			const text = ctx.lastComponent ?? new TC("", 0, 0);
 
-			if (ctx.isError) { text.setText(renderToolError(getText(result) || "Error", theme)); return text; }
+			if (ctx.isError) {
+				text.setText(renderToolError(getText(result) || "Error", theme));
+				return text;
+			}
 
 			const d = result.details as ReadDetails | undefined;
 
@@ -74,7 +104,11 @@ export function registerReadTool(
 			if (d?._type === "readImage") {
 				if ((ctx as any).showImages && isImageTerminal()) {
 					try {
-						const T = require("@earendil-works/pi-tui").Text as new (t?: string, x?: number, y?: number) => ComponentLike;
+						const T = require("@earendil-works/pi-tui").Text as new (
+							t?: string,
+							x?: number,
+							y?: number,
+						) => ComponentLike;
 						const img = new T("", 0, 0);
 						if (d.mimeType.startsWith("image/svg")) {
 							img.setText(d.data);
@@ -83,10 +117,16 @@ export function registerReadTool(
 							img.setText(`\x1b_Ga=T,f=100,m=${d.mimeType === "image/png" ? "1" : "0"};${pngData}\x1b\\\\`);
 						}
 						return img;
-					} catch { /* fall through */ }
+					} catch {
+						/* fall through */
+					}
 				}
 				const fc = result.content?.[0];
-				text.setText(fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 80) : `[image: ${d.filePath}]`)}`));
+				text.setText(
+					fillToolBackground(
+						`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 80) : `[image: ${d.filePath}]`)}`,
+					),
+				);
 				return text;
 			}
 
@@ -111,7 +151,9 @@ export function registerReadTool(
 					const code = show[i] ?? "";
 					const display = code.length > cw ? code.slice(0, cw) + `${FG_DIM}›${RST}` : code;
 					const lineNo = String(ln);
-					out.push(`  ${FG_LNUM}${" ".repeat(Math.max(0, nw - lineNo.length))}${lineNo}${RST} ${FG_RULE}│${RST} ${display}${RST}`);
+					out.push(
+						`  ${FG_LNUM}${" ".repeat(Math.max(0, nw - lineNo.length))}${lineNo}${RST} ${FG_RULE}│${RST} ${display}${RST}`,
+					);
 				}
 				if (total > maxShow) {
 					out.push(`  ${FG_DIM}  … ${total - maxShow} more lines (${total} total)${RST}`);
@@ -122,23 +164,35 @@ export function registerReadTool(
 				(ctx as any).state._rt = rendered;
 
 				// Async syntax highlighting via Shiki
-				renderFileContent(d.content, d.filePath, d.offset || 0, maxShow, tw).then(hl => {
-					const padded = hl.split("\n").map(l => `  ${l}`).join("\n");
-					const rendered = `\n  ${header}\n${padded}\n`;
-					text.setText(fillToolBackground(rendered));
-					(ctx as any).state._rt = rendered;
-				}).catch(() => {});
+				renderFileContent(d.content, d.filePath, d.offset || 0, maxShow, tw)
+					.then((hl) => {
+						const padded = hl
+							.split("\n")
+							.map((l) => `  ${l}`)
+							.join("\n");
+						const rendered = `\n  ${header}\n${padded}\n`;
+						text.setText(fillToolBackground(rendered));
+						(ctx as any).state._rt = rendered;
+					})
+					.catch(() => {});
 
 				return text;
 			}
 
 			const fc = result.content?.[0];
-			text.setText(fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`));
+			text.setText(
+				fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`),
+			);
 			return text;
 		},
 	} as unknown as ToolDefinition<any, any, any>);
 }
 
 function getText(result: Result): string {
-	return ((result.content ?? []) as TextContent[]).filter((c) => c.type === "text").map((c) => c.text).join("\n") ?? "";
+	return (
+		((result.content ?? []) as TextContent[])
+			.filter((c) => c.type === "text")
+			.map((c) => c.text)
+			.join("\n") ?? ""
+	);
 }
