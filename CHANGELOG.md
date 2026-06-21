@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.9] - 2026-06-21
+
+### Fixed
+
+- **Published extension crash on Pi session start/resume** — `multi-grep` imports
+  `Type` from `typebox` at module load time, so the built extension executes
+  `require("typebox")` while Pi loads `dist/index.js`. The package did not declare
+  `typebox` as a runtime dependency, so clean published installs could crash before
+  session handlers ran.
+
+  Fix: added `typebox` as a direct dependency and refreshed the lockfile so clean
+  extension installs include the module.
+
 ## [0.6.8] - 2026-06-21
 
 ### Fixed

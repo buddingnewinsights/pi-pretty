@@ -1,6 +1,6 @@
 {
 	"name": "@heyhuynhgiabuu/pi-pretty",
-	"version": "0.6.8",
+	"version": "0.6.9",
 	"description": "Pretty terminal output for pi — syntax-highlighted file reads, colored bash output, tree-view directory listings, and more.",
 	"keywords": [
 		"pi",
@@ -37,7 +37,8 @@
 	},
 	"dependencies": {
 		"@ff-labs/fff-node": "^0.9.4",
-		"@shikijs/cli": "^4.0.2"
+		"@shikijs/cli": "^4.0.2",
+		"typebox": "1.1.38"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.5",
