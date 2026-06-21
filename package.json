@@ -1,6 +1,6 @@
 {
 	"name": "@heyhuynhgiabuu/pi-pretty",
-	"version": "0.6.11",
+	"version": "0.6.12",
 	"description": "Pretty terminal output for pi — syntax-highlighted file reads, colored bash output, tree-view directory listings, and more.",
 	"keywords": [
 		"pi",
@@ -36,7 +36,6 @@
 		"test:watch": "vitest --passWithNoTests"
 	},
 	"dependencies": {
-		"@earendil-works/pi-coding-agent": "^0.79.9",
 		"@ff-labs/fff-node": "^0.9.4",
 		"@shikijs/cli": "^4.0.2",
 		"typebox": "1.1.38"
@@ -47,7 +46,8 @@
 		"@earendil-works/pi-tui": "*",
 		"@types/node": "^20.0.0",
 		"typescript": "^5.0.0",
-		"vitest": "^4.0.18"
+		"vitest": "^4.0.18",
+		"@earendil-works/pi-coding-agent": "^0.79.9"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-tui": "*"

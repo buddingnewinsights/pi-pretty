@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.12] - 2026-06-21
+
+### Fixed
+
+- **Published install resume crash on Pi 0.79.9** — remove the nested runtime
+  `@earendil-works/pi-coding-agent` dependency from published installs and make
+  FFF startup independent from the optional SDK tool-factory import. Published
+  extensions should not load a second Pi host runtime inside the Pi process.
+
+- **FFF native teardown during resume/session switching** — stop destroying the
+  native FFF finder in `session_shutdown`; Pi can emit shutdown/start while the
+  same process continues, and native teardown in that transition is too risky.
+
 ## [0.6.11] - 2026-06-21
 
 ### Fixed

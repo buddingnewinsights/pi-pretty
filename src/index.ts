@@ -12,9 +12,6 @@
 // Re-export for tests
 export { __imageInternals } from "./image.js";
 
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
-
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 import type { PiPrettyDeps } from "./types.js";
@@ -54,91 +51,22 @@ export default async function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrett
 	const cwd = process.cwd();
 
 	// ------------------------------------------------------------------
-	// Resolve SDK tools
-	// ------------------------------------------------------------------
-
-	let sdk: any;
-	let createReadTool: any;
-	let createBashTool: any;
-	let createLsTool: any;
-	let createFindTool: any;
-	let createGrepTool: any;
-	let getAgentDir: (() => string) | undefined;
-
-	if (deps) {
-		sdk = deps.sdk ?? {};
-		createReadTool = sdk.createReadTool ?? sdk.createReadToolDefinition;
-		createBashTool = sdk.createBashTool ?? sdk.createBashToolDefinition;
-		createLsTool = sdk.createLsTool ?? sdk.createLsToolDefinition;
-		createFindTool = sdk.createFindTool ?? sdk.createFindToolDefinition;
-		createGrepTool = sdk.createGrepTool ?? sdk.createGrepToolDefinition;
-		getAgentDir = sdk.getAgentDir;
-	} else {
-		try {
-			// Dynamic import() uses ESM resolution (not CJS interop), so it
-			// correctly resolves subpath exports like @earendil-works/pi-ai/base
-			// which only have "import" conditions in their exports map.
-			const mod = await import("@earendil-works/pi-coding-agent");
-			sdk = mod;
-			createReadTool = sdk.createReadToolDefinition ?? sdk.createReadTool;
-			createBashTool = sdk.createBashToolDefinition ?? sdk.createBashTool;
-			createLsTool = sdk.createLsToolDefinition ?? sdk.createLsTool;
-			createFindTool = sdk.createFindToolDefinition ?? sdk.createFindTool;
-			createGrepTool = sdk.createGrepToolDefinition ?? sdk.createGrepTool;
-		} catch {
-			return; // pi SDK not available
-		}
-	}
-
-	if (!createReadTool) return;
-
-	// ------------------------------------------------------------------
 	// FFF service init
 	// ------------------------------------------------------------------
+	// Keep FFF independent from the Pi SDK import. Published extension installs
+	// run in Pi's isolated npm root; importing a nested Pi SDK at activation time
+	// has proven crash-prone across host Pi versions. FFF commands and indexing
+	// should still work even when SDK tool factories are unavailable.
 
-	const agentDir = getAgentDir ? getAgentDir() : getDefaultAgentDir();
-
-	let fffService: FffService | null = new FffService(undefined, agentDir);
-
-	if (deps?.fffModule) {
-		fffService = new FffService(deps.fffModule, agentDir);
-	}
+	const maybeGetAgentDir = deps?.sdk?.getAgentDir;
+	const agentDir = typeof maybeGetAgentDir === "function" ? maybeGetAgentDir() : getDefaultAgentDir();
+	let fffService: FffService | null = new FffService(deps?.fffModule, agentDir);
 
 	// Ripgrep fallback for multi_grep
 	const multiGrepFallback = deps?.multiGrepRipgrepFallback ?? runMultiGrepRipgrepFallback;
 
 	// Text component for custom rendering (DI-friendly)
 	const TextComp = deps?.TextComponent;
-
-	// ------------------------------------------------------------------
-	// Tool registration
-	// ------------------------------------------------------------------
-
-	if (isToolEnabled("read") && createReadTool) {
-		registerReadTool(pi, cwd, null, createReadTool(cwd), TextComp);
-	}
-	if (isToolEnabled("bash") && createBashTool) {
-		registerBashTool(pi, cwd, null, createBashTool(cwd), TextComp);
-	}
-	if (isToolEnabled("ls") && createLsTool) {
-		registerLsTool(pi, cwd, null, createLsTool(cwd), TextComp);
-	}
-	if (isToolEnabled("find") && createFindTool) {
-		registerFindTool(pi, cwd, fffService, createFindTool(cwd), TextComp);
-	}
-	if (isToolEnabled("grep") && createGrepTool) {
-		registerGrepTool(pi, cwd, fffService, createGrepTool(cwd), TextComp);
-	}
-	if (isToolEnabled("multi_grep") && (fffService || createGrepTool)) {
-		registerMultiGrepTool(
-			pi,
-			cwd,
-			fffService,
-			createGrepTool ? createGrepTool(cwd) : undefined,
-			multiGrepFallback,
-			TextComp,
-		);
-	}
 
 	// ------------------------------------------------------------------
 	// FFF commands
@@ -213,13 +141,13 @@ export default async function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrett
 	pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
 		if (!fffService) return;
 
-		// Try dynamic import if sync require failed
-		if (!fffService.isModuleLoaded()) {
-			const loaded = await fffService.tryLoadModule();
-			if (!loaded) return;
-		}
-
 		try {
+			// Try dynamic import if sync require failed
+			if (!fffService.isModuleLoaded()) {
+				const loaded = await fffService.tryLoadModule();
+				if (!loaded) return;
+			}
+
 			await fffService.ensureFinder(ctx.cwd);
 			if (fffService.partialIndex) {
 				ctx.ui?.notify?.("FFF: scan timed out — using partial index. Run /fff-rescan when ready.", "warning");
@@ -228,19 +156,87 @@ export default async function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrett
 				ui?.setStatus?.("fff", "FFF indexed");
 				setTimeout(() => ui?.setStatus?.("fff", undefined), 3000);
 			}
+
+			// Register FFF-backed @-mention autocomplete only after a finder exists.
+			ctx.ui?.addAutocompleteProvider?.((current) =>
+				createFffAutocompleteProvider(current, () => fffService?.getFinder() ?? null),
+			);
 		} catch (error: unknown) {
 			ctx.ui?.notify?.(`FFF init failed: ${error instanceof Error ? error.message : String(error)}`, "error");
 		}
-
-		// Register FFF-backed @-mention autocomplete
-		ctx.ui?.addAutocompleteProvider?.((current) =>
-			createFffAutocompleteProvider(current, () => fffService?.getFinder() ?? null),
-		);
 	});
 
 	pi.on("session_shutdown", async () => {
-		fffService?.destroy();
+		// Intentionally do not destroy the native FFF finder on session shutdown.
+		// Pi can emit shutdown/start during resume or session switching while the
+		// process keeps running. Native teardown during that transition has caused
+		// hard process crashes in published installs; let process exit reclaim it.
+		fffService = null;
 	});
+
+	// ------------------------------------------------------------------
+	// Resolve SDK tools, if available
+	// ------------------------------------------------------------------
+	// The SDK import is optional. Do not return from the extension if it fails;
+	// FFF commands/indexing above must remain available in published npm installs.
+
+	let sdk: any = deps?.sdk ?? {};
+	let createReadTool: any = sdk.createReadTool ?? sdk.createReadToolDefinition;
+	let createBashTool: any = sdk.createBashTool ?? sdk.createBashToolDefinition;
+	let createLsTool: any = sdk.createLsTool ?? sdk.createLsToolDefinition;
+	let createFindTool: any = sdk.createFindTool ?? sdk.createFindToolDefinition;
+	let createGrepTool: any = sdk.createGrepTool ?? sdk.createGrepToolDefinition;
+
+	if (!deps) {
+		try {
+			// Dynamic import() uses ESM resolution (not CJS interop), so it
+			// correctly resolves subpath exports like @earendil-works/pi-ai/base
+			// which only have "import" conditions in their exports map.
+			const mod = await import("@earendil-works/pi-coding-agent");
+			sdk = mod;
+			createReadTool = sdk.createReadToolDefinition ?? sdk.createReadTool;
+			createBashTool = sdk.createBashToolDefinition ?? sdk.createBashTool;
+			createLsTool = sdk.createLsToolDefinition ?? sdk.createLsTool;
+			createFindTool = sdk.createFindToolDefinition ?? sdk.createFindTool;
+			createGrepTool = sdk.createGrepToolDefinition ?? sdk.createGrepTool;
+		} catch {
+			createReadTool = undefined;
+			createBashTool = undefined;
+			createLsTool = undefined;
+			createFindTool = undefined;
+			createGrepTool = undefined;
+		}
+	}
+
+	// ------------------------------------------------------------------
+	// Tool registration
+	// ------------------------------------------------------------------
+
+	if (isToolEnabled("read") && createReadTool) {
+		registerReadTool(pi, cwd, null, createReadTool(cwd), TextComp);
+	}
+	if (isToolEnabled("bash") && createBashTool) {
+		registerBashTool(pi, cwd, null, createBashTool(cwd), TextComp);
+	}
+	if (isToolEnabled("ls") && createLsTool) {
+		registerLsTool(pi, cwd, null, createLsTool(cwd), TextComp);
+	}
+	if (isToolEnabled("find") && createFindTool) {
+		registerFindTool(pi, cwd, fffService, createFindTool(cwd), TextComp);
+	}
+	if (isToolEnabled("grep") && createGrepTool) {
+		registerGrepTool(pi, cwd, fffService, createGrepTool(cwd), TextComp);
+	}
+	if (isToolEnabled("multi_grep") && (fffService || createGrepTool)) {
+		registerMultiGrepTool(
+			pi,
+			cwd,
+			fffService,
+			createGrepTool ? createGrepTool(cwd) : undefined,
+			multiGrepFallback,
+			TextComp,
+		);
+	}
 
 	// Fallback padding for SDK-rendered tool bodies. The SDK reads
 	// result.content[0].text and slices collapsed output to roughly the first
