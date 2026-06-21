@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.11] - 2026-06-21
+
+### Fixed
+
+- **Pi resume crash with v0.6.10 on Pi 0.79.9** — `v0.6.10` promoted
+  `@earendil-works/pi-coding-agent` to a runtime dependency but kept the old
+  `^0.75.1` range. Published installs could therefore load a nested older Pi SDK
+  inside a Pi `0.79.9` host process during extension activation/resume.
+
+  Fix: align the runtime SDK dependency with Pi `0.79.9` and refresh the lockfile.
+
 ## [0.6.10] - 2026-06-21
 
 ### Fixed
