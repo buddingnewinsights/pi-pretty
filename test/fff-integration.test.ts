@@ -540,7 +540,7 @@ describe("piPrettyExtension integration", () => {
     		});
     		const result = await tools.get("find")!.execute("t1", { pattern: "*", limit: 200 }, null, null, {});
 			const notices = (result.details as any).notices as string[];
-			expect(notices).toContain("Warning: partial file index");
+			expect(notices).toContain("FFF index incomplete; results may be missing files");
 			expect(notices).toContain("200 limit reached");
 			expect(notices).toContain("500 total matches");
 		});

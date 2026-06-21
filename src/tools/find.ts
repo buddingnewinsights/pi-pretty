@@ -7,6 +7,7 @@ import { resolveBaseBackground, BG_ERROR, FG_DIM, RST } from "../config.js";
 import { shortPath } from "../helpers.js";
 import { wrapExecuteWithMetrics } from "./metrics.js";
 import { renderFindResults, renderToolError, renderToolMetrics, fillToolBackground } from "../render.js";
+import { NOTICE_PARTIAL_FILE_INDEX } from "../notices.js";
 
 type Result = AgentToolResult<Record<string, unknown>>;
 
@@ -55,7 +56,7 @@ export function registerFindTool(
     					if (searchResult.ok) {
     						const items: FileItem[] = searchResult.value.items.slice(0, effectiveLimit);
     						const notices: string[] = [];
-    						if (fffService?.partialIndex) notices.push("Warning: partial file index");
+    						if (fffService?.partialIndex) notices.push(NOTICE_PARTIAL_FILE_INDEX);
     						if (items.length >= effectiveLimit) notices.push(`${effectiveLimit} limit reached`);
     						if (searchResult.value.totalMatched > items.length) notices.push(`${searchResult.value.totalMatched} total matches`);
     						const paths = items.map((i) => i.relativePath).join("\n");

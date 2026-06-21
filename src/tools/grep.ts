@@ -8,6 +8,7 @@ import { shortPath, normalizeLineEndings } from "../helpers.js";
 import { wrapExecuteWithMetrics } from "./metrics.js";
 import { renderToolError, fillToolBackground } from "../render.js";
 import { fffFormatGrepText } from "../fff-helpers.js";
+import { NOTICE_PARTIAL_FILE_INDEX } from "../notices.js";
 
 const invalidArg = "<missing>";
 
@@ -50,7 +51,7 @@ export function registerGrepTool(
 						const items = grep.items.slice(0, effectiveLimit);
 						const cursorStore = fffService.getCursorStore();
 						const notices: string[] = [];
-						if (fffService.partialIndex) notices.push("Warning: partial file index");
+						if (fffService.partialIndex) notices.push(NOTICE_PARTIAL_FILE_INDEX);
 						if (items.length >= effectiveLimit) notices.push(`${effectiveLimit} limit reached`);
 						if (grep.regexFallbackError) notices.push(`Regex failed: ${grep.regexFallbackError}, used literal match`);
 						if (grep.nextCursor) {

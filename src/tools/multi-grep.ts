@@ -9,6 +9,7 @@ import { wrapExecuteWithMetrics } from "./metrics.js";
 import { renderToolError, renderToolMetrics, fillToolBackground } from "../render.js";
 import { fffFormatGrepText } from "../fff-helpers.js";
 import { parseMultiGrepConstraints } from "../multi-grep-fallback.js";
+import { NOTICE_PARTIAL_FILE_INDEX } from "../notices.js";
 import type { MultiGrepFallback } from "../types.js";
 
 type Result = AgentToolResult<Record<string, unknown>>;
@@ -84,7 +85,7 @@ export function registerMultiGrepTool(
 						const items = grep.items.slice(0, effectiveLimit);
 						const cursorStore = fffService.getCursorStore();
 						const notices: string[] = [];
-						if (fffService.partialIndex) notices.push("Warning: partial file index");
+						if (fffService.partialIndex) notices.push(NOTICE_PARTIAL_FILE_INDEX);
 						if (items.length >= effectiveLimit) notices.push(`${effectiveLimit} limit reached`);
 						if (grep.nextCursor) {
 							const cursorId = cursorStore.store(grep.nextCursor);
