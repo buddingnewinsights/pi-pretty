@@ -1,8 +1,12 @@
 /* pi-pretty: grep tool -- FFF-backed text search with SDK fallback. */
 
-import { type ToolDefinition, type ExtensionAPI, type ExtensionContext, type AgentToolResult } from "@earendil-works/pi-coding-agent";
+import {
+	type ToolDefinition,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type AgentToolResult,
+} from "@earendil-works/pi-coding-agent";
 import type { SdkToolDef, GrepDetails, FffServiceWithCursor, TextContent, ThemeLike, RenderCtxLike } from "../types.js";
-import { keyHint } from "@earendil-works/pi-coding-agent";
 import { MAX_PREVIEW_LINES, BG_ERROR, resolveBaseBackground } from "../config.js";
 import { shortPath, normalizeLineEndings } from "../helpers.js";
 import { wrapExecuteWithMetrics } from "./metrics.js";
@@ -21,7 +25,14 @@ export function registerGrepTool(
 	sdkTool: SdkToolDef,
 	TextComp?: new (t?: string, x?: number, y?: number) => { setText(v: string): void },
 ): void {
-	const T = TextComp ?? (() => { const m = require("@earendil-works/pi-tui") as { Text: new (t?: string, x?: number, y?: number) => { setText(v: string): void } }; return m.Text; })();
+	const T =
+		TextComp ??
+		(() => {
+			const m = require("@earendil-works/pi-tui") as {
+				Text: new (t?: string, x?: number, y?: number) => { setText(v: string): void };
+			};
+			return m.Text;
+		})();
 	const home = process.env.HOME ?? "";
 
 	pi.registerTool({
@@ -45,7 +56,12 @@ export function registerGrepTool(
 					const fff = fffService.getFinder();
 					if (!fff) throw new Error("FFF finder not available");
 					const effectiveLimit = Math.max(1, limit);
-					const grepResult = fff.grep(pattern, { pageSize: effectiveLimit, mode: literal ? "plain" : "regex", beforeContext: context, afterContext: context });
+					const grepResult = fff.grep(pattern, {
+						pageSize: effectiveLimit,
+						mode: literal ? "plain" : "regex",
+						beforeContext: context,
+						afterContext: context,
+					});
 					if (grepResult.ok) {
 						const grep = grepResult.value;
 						const items = grep.items.slice(0, effectiveLimit);
@@ -59,15 +75,36 @@ export function registerGrepTool(
 							notices.push(`More results available: cursor="${cursorId}"`);
 						}
 						const text = appendNotices(fffFormatGrepText(items, effectiveLimit), notices);
-						return { content: [{ type: "text" as const, text }], details: { _type: "grepResult", text, pattern, matchCount: items.length } as GrepDetails };
+						return {
+							content: [{ type: "text" as const, text }],
+							details: {
+								_type: "grepResult",
+								text,
+								pattern,
+								matchCount: items.length,
+							} as GrepDetails,
+						};
 					}
-				} catch { /* fall through */ }
+				} catch {
+					/* fall through */
+				}
 			}
 
-			const result = await sdkTool.execute(tid, p, sig, undefined, ctx) as Result;
-			for (const c of (result.content ?? []) as any[]) { if (c.type === "text") c.text = normalizeLineEndings(c.text); }
-			const tc = ((result.content ?? []) as TextContent[]).filter((c) => c.type === "text").map((c) => c.text).join("\n") ?? "";
-			result.details = { _type: "grepResult", text: tc, pattern, matchCount: tc ? tc.trim().split("\n").filter(Boolean).length : 0 } as GrepDetails;
+			const result = (await sdkTool.execute(tid, p, sig, undefined, ctx)) as Result;
+			for (const c of (result.content ?? []) as any[]) {
+				if (c.type === "text") c.text = normalizeLineEndings(c.text);
+			}
+			const tc =
+				((result.content ?? []) as TextContent[])
+					.filter((c) => c.type === "text")
+					.map((c) => c.text)
+					.join("\n") ?? "";
+			result.details = {
+				_type: "grepResult",
+				text: tc,
+				pattern,
+				matchCount: tc ? tc.trim().split("\n").filter(Boolean).length : 0,
+			} as GrepDetails;
 			return result;
 		}),
 
@@ -92,7 +129,18 @@ export function registerGrepTool(
 		renderResult(result: Result, _opt: unknown, theme: ThemeLike, ctx: RenderCtxLike) {
 			resolveBaseBackground(theme);
 			const text = ctx.lastComponent ?? new T("", 0, 0);
-			if (ctx.isError) { text.setText(renderToolError(((result.content ?? []) as TextContent[]).filter((c) => c.type === "text").map((c) => c.text).join("\n") || "Error", theme)); return text; }
+			if (ctx.isError) {
+				text.setText(
+					renderToolError(
+						((result.content ?? []) as TextContent[])
+							.filter((c) => c.type === "text")
+							.map((c) => c.text)
+							.join("\n") || "Error",
+						theme,
+					),
+				);
+				return text;
+			}
 			const d = result.details as GrepDetails | undefined;
 			if (d?._type === "grepResult" && d.text) {
 				const lines = d.text.split("\n");
@@ -105,7 +153,7 @@ export function registerGrepTool(
 					out.push(theme.fg("toolOutput", line));
 				}
 				if (remaining > 0) {
-					out.push(theme.fg("muted", `… (${remaining} more ${remaining === 1 ? "line" : "lines"}, ${keyHint("app.tools.expand", "to expand")})`));
+					out.push(theme.fg("muted", `… (${remaining} more ${remaining === 1 ? "line" : "lines"}, to expand)`));
 				}
 				const body = out.map((l) => `  ${l}`).join("\n") + "\n\n";
 				text.setText(fillToolBackground(body, ctx.isError ? BG_ERROR : undefined));
@@ -119,4 +167,6 @@ export function registerGrepTool(
 	} as unknown as ToolDefinition<any, any, any>);
 }
 
-function appendNotices(text: string, notices: string[]): string { return notices.length ? `${text}\n\n[${notices.join(". ")}]` : text; }
+function appendNotices(text: string, notices: string[]): string {
+	return notices.length ? `${text}\n\n[${notices.join(". ")}]` : text;
+}

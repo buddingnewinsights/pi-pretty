@@ -7,21 +7,47 @@
 
 import type { BundledLanguage } from "shiki";
 import { codeToANSI } from "@shikijs/cli";
-import { truncateToWidth } from "@earendil-works/pi-tui";
 import { basename, dirname } from "node:path";
 
 import {
-	RST, FG_LNUM, FG_DIM, FG_RULE, FG_GREEN, FG_RED, FG_YELLOW, FG_BLUE,
-	BG_BASE, BG_ERROR,
-	dirIcon, detectLang, termWidth, MAX_PREVIEW_LINES, MAX_HL_CHARS, CACHE_LIMIT,
+	RST,
+	FG_LNUM,
+	FG_DIM,
+	FG_RULE,
+	FG_GREEN,
+	FG_RED,
+	FG_YELLOW,
+	FG_BLUE,
+	BG_BASE,
+	BG_ERROR,
+	dirIcon,
+	detectLang,
+	termWidth,
+	MAX_PREVIEW_LINES,
+	MAX_HL_CHARS,
+	CACHE_LIMIT,
 	resolveBaseBackground,
 } from "./config.js";
 import {
-	normalizeLineEndings, humanSize, formatElapsedMs, formatCharCount,
-	ELAPSED_KEY, CHARS_KEY, compactErrorLines,
+	normalizeLineEndings,
+	humanSize,
+	formatElapsedMs,
+	formatCharCount,
+	ELAPSED_KEY,
+	CHARS_KEY,
+	compactErrorLines,
 } from "./helpers.js";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { ThemeLike, RenderCtxLike as RenderContext } from "./types.js";
+
+// ---------------------------------------------------------------------------
+// Lazy imports — avoid top-level require() that blocks module loading
+// ---------------------------------------------------------------------------
+
+/** Lazy accessor to pi-tui's truncateToWidth */
+function _truncateToWidth(text: string, maxWidth: number, ellipsis?: string, pad?: boolean): string {
+	return require("@earendil-works/pi-tui").truncateToWidth(text, maxWidth, ellipsis, pad);
+}
 
 // ---------------------------------------------------------------------------
 // Shiki ANSI cache
@@ -113,9 +139,15 @@ export function preserveBoxBackground(ansi: string): string {
 			if (code === 38) {
 				// Foreground extended — keep entire sequence
 				kept.push(parts[i]);
-				if (parts[i + 1] === "5") { kept.push(parts[i + 1]); i += 2; }
-				else if (parts[i + 1] === "2") { kept.push(parts[i + 1], parts[i + 2], parts[i + 3], parts[i + 4]); i += 5; }
-				else { i++; }
+				if (parts[i + 1] === "5") {
+					kept.push(parts[i + 1]);
+					i += 2;
+				} else if (parts[i + 1] === "2") {
+					kept.push(parts[i + 1], parts[i + 2], parts[i + 3], parts[i + 4]);
+					i += 5;
+				} else {
+					i++;
+				}
 			} else if (code === 48) {
 				// Background extended — skip entirely
 				if (parts[i + 1] === "5") i += 3;
@@ -136,7 +168,7 @@ export function fillToolBackground(text: string, bg = BG_BASE, width?: number): 
 	return text
 		.split("\n")
 		.map((line) => {
-			const fitted = width ? truncateToWidth(line, width, "") : line;
+			const fitted = width ? _truncateToWidth(line, width, "") : line;
 			const stripped = preserveBoxBackground(fitted);
 			// Apply background to the entire line
 			return bg ? bg + stripped : stripped;
@@ -198,7 +230,7 @@ export async function renderFileContent(
 
 	const out: string[] = [];
 	for (const line of hl) {
-		out.push(truncateToWidth(line ?? "", Math.max(1, tw), `${FG_DIM}›`));
+		out.push(_truncateToWidth(line ?? "", Math.max(1, tw), `${FG_DIM}›`));
 	}
 	return out.join("\n");
 }
@@ -210,9 +242,10 @@ export async function renderFileContent(
 export function renderBashOutput(text: string, exitCode: number | null): { summary: string; body: string } {
 	const isOk = exitCode === 0;
 	const statusIcon = isOk ? "✓" : "✗";
-	const codeStr = exitCode !== null
-		? `${isOk ? FG_GREEN : FG_RED}${statusIcon} exit ${exitCode}${RST}`
-		: `${FG_YELLOW}⚡ killed${RST}`;
+	const codeStr =
+		exitCode !== null
+			? `${isOk ? FG_GREEN : FG_RED}${statusIcon} exit ${exitCode}${RST}`
+			: `${FG_YELLOW}⚡ killed${RST}`;
 
 	const lines = text.split("\n");
 	const maxShow = MAX_PREVIEW_LINES;
@@ -255,44 +288,46 @@ export function renderTree(text: string, _basePath: string): string {
 	return out.join("\n");
 }
 
-    // ---------------------------------------------------------------------------
-    // Find — grouped file list (plain, no tree characters or icons)
-    // ---------------------------------------------------------------------------
-    
-    export function renderFindResults(text: string, theme?: ThemeLike): string {
-    	const lines = text.trim().split("\n").filter(Boolean);
-    	if (!lines.length) return theme ? theme.fg("dim", "(no matches)") : `${FG_DIM}(no matches)${RST}`;
-    
-    	const groups = new Map<string, string[]>();
-    	for (const line of lines) {
-    		const trimmed = line.trim();
-    		const dir = dirname(trimmed) || ".";
-    		const file = basename(trimmed);
-    		if (!groups.has(dir)) groups.set(dir, []);
-    		const bucket = groups.get(dir);
-    		if (bucket) bucket.push(file);
-    	}
-    
-    	const out: string[] = [];
-    	let count = 0;
-    
-    	for (const [dir, files] of groups) {
-    		if (count > 0) out.push("");
-    		const dirColored = theme ? theme.fg("accent", theme.bold(`${dir}/`)) : `${FG_BLUE}\x1b[1m${dir}/${RST}`;
-    		out.push(dirColored);
-    		for (let i = 0; i < files.length; i++) {
-    			if (count >= MAX_PREVIEW_LINES) {
-    				const more = theme ? theme.fg("dim", `… ${lines.length - count} more files`) : `${FG_DIM}… ${lines.length - count} more files${RST}`;
-    				out.push(`  ${more}`);
-    				return out.join("\n");
-    			}
-    		out.push(`  ${files[i]}`);
-    		count++;
-    	}
-    	}
-    
-            	return out.join("\n");
-            }
+// ---------------------------------------------------------------------------
+// Find — grouped file list (plain, no tree characters or icons)
+// ---------------------------------------------------------------------------
+
+export function renderFindResults(text: string, theme?: ThemeLike): string {
+	const lines = text.trim().split("\n").filter(Boolean);
+	if (!lines.length) return theme ? theme.fg("dim", "(no matches)") : `${FG_DIM}(no matches)${RST}`;
+
+	const groups = new Map<string, string[]>();
+	for (const line of lines) {
+		const trimmed = line.trim();
+		const dir = dirname(trimmed) || ".";
+		const file = basename(trimmed);
+		if (!groups.has(dir)) groups.set(dir, []);
+		const bucket = groups.get(dir);
+		if (bucket) bucket.push(file);
+	}
+
+	const out: string[] = [];
+	let count = 0;
+
+	for (const [dir, files] of groups) {
+		if (count > 0) out.push("");
+		const dirColored = theme ? theme.fg("accent", theme.bold(`${dir}/`)) : `${FG_BLUE}\x1b[1m${dir}/${RST}`;
+		out.push(dirColored);
+		for (let i = 0; i < files.length; i++) {
+			if (count >= MAX_PREVIEW_LINES) {
+				const more = theme
+					? theme.fg("dim", `… ${lines.length - count} more files`)
+					: `${FG_DIM}… ${lines.length - count} more files${RST}`;
+				out.push(`  ${more}`);
+				return out.join("\n");
+			}
+			out.push(`  ${files[i]}`);
+			count++;
+		}
+	}
+
+	return out.join("\n");
+}
 
 // ---------------------------------------------------------------------------
 // Grep — highlighted matches with line numbers
@@ -309,7 +344,9 @@ export async function renderGrepResults(text: string, pattern: string): Promise<
 	let re: RegExp | null = null;
 	try {
 		re = new RegExp(`(${pattern})`, "gi");
-	} catch { /* skip highlighting */ }
+	} catch {
+		/* skip highlighting */
+	}
 
 	for (const line of lines) {
 		if (count >= MAX_PREVIEW_LINES) {

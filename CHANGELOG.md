@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.7] - 2026-06-21
+
+### Fixed
+
+- **Module loading crash before factory execution** — The v0.6.6 fix wrapped
+  `import("@earendil-works/pi-coding-agent")` in a try-catch block inside the
+  extension factory, but two files (`src/tools/grep.ts` and `src/render.ts`) had
+  **top-level value imports** from `@earendil-works/pi-coding-agent` (`keyHint`)
+  and `@earendil-works/pi-tui` (`truncateToWidth`). These compiled to top-level
+  `require()` calls that executed during **jiti module loading** (before the
+  factory), causing the extension to crash before the try-catch could fire.
+
+  Fix:
+  - `grep.ts`: replaced `import { keyHint }` with inline fallback text
+  - `render.ts`: replaced `import { truncateToWidth }` with lazy `require()`
+    inside a helper function (avoids top-level evaluation)
+
 ## [0.6.6] - 2026-06-21
 
 ### Fixed

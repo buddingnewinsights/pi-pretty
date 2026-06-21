@@ -17,3 +17,4 @@ pnpm-debug.log*
 !biome.json
 .DS_Store
 .pi/
+.opencode/

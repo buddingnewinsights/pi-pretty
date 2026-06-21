@@ -1,6 +1,6 @@
 {
 	"name": "@heyhuynhgiabuu/pi-pretty",
-	"version": "0.6.6",
+	"version": "0.6.7",
 	"description": "Pretty terminal output for pi — syntax-highlighted file reads, colored bash output, tree-view directory listings, and more.",
 	"keywords": [
 		"pi",
