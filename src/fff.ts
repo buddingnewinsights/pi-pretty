@@ -47,6 +47,35 @@ export class CursorStore {
 // FffService — wraps a single FileFinder instance
 // ---------------------------------------------------------------------------
 
+const SHARED_FFF_SERVICE_KEY = Symbol.for("pi-pretty.fff-service");
+
+type SharedFffState = {
+	service: FffService;
+};
+
+type GlobalWithFffService = typeof globalThis & {
+	[SHARED_FFF_SERVICE_KEY]?: SharedFffState;
+};
+
+export function getSharedFffService(fffModule?: typeof import("@ff-labs/fff-node"), agentDir?: string): FffService {
+	const sharedGlobal = globalThis as GlobalWithFffService;
+	const existing = sharedGlobal[SHARED_FFF_SERVICE_KEY];
+	if (existing) {
+		existing.service.configure(fffModule, agentDir);
+		return existing.service;
+	}
+
+	const service = new FffService(fffModule, agentDir);
+	sharedGlobal[SHARED_FFF_SERVICE_KEY] = { service };
+	return service;
+}
+
+export function resetSharedFffServiceForTests(): void {
+	const sharedGlobal = globalThis as GlobalWithFffService;
+	sharedGlobal[SHARED_FFF_SERVICE_KEY]?.service.destroy();
+	delete sharedGlobal[SHARED_FFF_SERVICE_KEY];
+}
+
 export class FffService {
 	finder: FffFileFinder | null = null;
 	partialIndex = false;
@@ -57,13 +86,17 @@ export class FffService {
 	private finderPromise: Promise<void> | null = null;
 
 	constructor(fffModule?: typeof import("@ff-labs/fff-node"), agentDir?: string) {
-		if (fffModule) {
-			this.fffModule = fffModule;
-			if (agentDir) {
-				this.dbDir = join(agentDir, "pi-pretty", "fff");
-				try {
-					mkdirSync(this.dbDir, { recursive: true });
-				} catch { /* ignore */ }
+		this.configure(fffModule, agentDir);
+	}
+
+	configure(fffModule?: typeof import("@ff-labs/fff-node"), agentDir?: string): void {
+		if (fffModule) this.fffModule = fffModule;
+		if (agentDir) {
+			this.dbDir = join(agentDir, "pi-pretty", "fff");
+			try {
+				mkdirSync(this.dbDir, { recursive: true });
+			} catch {
+				// FFF can still run without persistent frecency/history paths.
 			}
 		}
 	}
@@ -87,7 +120,9 @@ export class FffService {
 				this.dbDir = join(process.env.HOME, ".pi/agent", "pi-pretty", "fff");
 				try {
 					mkdirSync(this.dbDir, { recursive: true });
-				} catch { /* ignore */ }
+				} catch {
+					/* ignore */
+				}
 			}
 			return true;
 		} catch {
@@ -99,9 +134,13 @@ export class FffService {
 		if (this.finder && !this.finder.isDestroyed) return;
 		if (this.finderPromise) return this.finderPromise;
 
-		this.finderPromise = this._createFinder(cwd);
-		await this.finderPromise;
-		this.finderPromise = null;
+		const promise = this._createFinder(cwd);
+		this.finderPromise = promise;
+		try {
+			await promise;
+		} finally {
+			if (this.finderPromise === promise) this.finderPromise = null;
+		}
 	}
 
 	private async _createFinder(cwd: string): Promise<void> {
@@ -112,13 +151,7 @@ export class FffService {
 			this.finder = null;
 		}
 
-		const result = this.fffModule.FileFinder.create({
-			basePath: cwd,
-			frecencyDbPath: this.dbDir ? join(this.dbDir, "frecency.mdb") : "",
-			historyDbPath: this.dbDir ? join(this.dbDir, "history.mdb") : "",
-			aiMode: true,
-		});
-
+		const result = this.createFinder(cwd, this.dbDir);
 		if (!result.ok) {
 			throw new Error(`FFF init failed: ${result.error}`);
 		}
@@ -126,6 +159,33 @@ export class FffService {
 		this.finder = result.value;
 		const scan = await this.finder.waitForScan(15_000);
 		this.partialIndex = scan.ok && !scan.value;
+	}
+
+	private createFinder(
+		cwd: string,
+		dbDir: string | null,
+	): ReturnType<typeof import("@ff-labs/fff-node").FileFinder.create> {
+		if (!this.fffModule) throw new Error("FFF module is not loaded");
+		const result = this.fffModule.FileFinder.create({
+			basePath: cwd,
+			frecencyDbPath: dbDir ? join(dbDir, "frecency.mdb") : "",
+			historyDbPath: dbDir ? join(dbDir, "history.mdb") : "",
+			aiMode: true,
+		});
+		if (result.ok || !isAlreadyOpenError(result.error) || !dbDir) return result;
+
+		const isolatedDir = join(dbDir, `runtime-${process.pid}-${Date.now()}`);
+		try {
+			mkdirSync(isolatedDir, { recursive: true });
+		} catch {
+			return result;
+		}
+		return this.fffModule.FileFinder.create({
+			basePath: cwd,
+			frecencyDbPath: join(isolatedDir, "frecency.mdb"),
+			historyDbPath: join(isolatedDir, "history.mdb"),
+			aiMode: true,
+		});
 	}
 
 	destroy(): void {
@@ -144,4 +204,8 @@ export class FffService {
 	getCursorStore(): CursorStore {
 		return this.cursorStore;
 	}
+}
+
+function isAlreadyOpenError(error: string): boolean {
+	return /environment already open/i.test(error);
 }

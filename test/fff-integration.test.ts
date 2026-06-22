@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createFffAutocompleteProvider } from "../src/autocomplete.js";
 import { CursorStore, fffFormatGrepText } from "../src/fff-helpers.js";
+import { resetSharedFffServiceForTests } from "../src/fff.js";
 import piPrettyExtension, { type PiPrettyDeps } from "../src/index.js";
 import {
 	getMultiGrepRipgrepArgs,
@@ -385,6 +386,7 @@ describe("piPrettyExtension integration", () => {
 	}
 
 	afterEach(() => {
+		resetSharedFffServiceForTests();
 		vi.useRealTimers();
 	});
 
@@ -829,11 +831,11 @@ describe("piPrettyExtension integration", () => {
 			expect(setStatus).toHaveBeenNthCalledWith(2, "fff", undefined);
 		});
 
-		it("shutdown → subsequent find falls back to SDK", async () => {
+		it("shutdown keeps shared FFF service for session resume", async () => {
 			await loadWithFFF();
 			await events.get("session_shutdown")!();
 			await tools.get("find")!.execute("t1", { pattern: "*.ts" }, null, null, {});
-			expect(findExec).toHaveBeenCalledOnce();
+			expect(findExec).not.toHaveBeenCalled();
 		});
 	});
 });

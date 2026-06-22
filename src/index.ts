@@ -15,7 +15,7 @@ export { __imageInternals } from "./image.js";
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 import type { PiPrettyDeps } from "./types.js";
-import { FffService } from "./fff.js";
+import { getSharedFffService, type FffService } from "./fff.js";
 import { registerReadTool } from "./tools/read.js";
 import { registerBashTool } from "./tools/bash.js";
 import { registerLsTool } from "./tools/ls.js";
@@ -60,7 +60,7 @@ export default async function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrett
 
 	const maybeGetAgentDir = deps?.sdk?.getAgentDir;
 	const agentDir = typeof maybeGetAgentDir === "function" ? maybeGetAgentDir() : getDefaultAgentDir();
-	let fffService: FffService | null = new FffService(deps?.fffModule, agentDir);
+	let fffService: FffService | null = getSharedFffService(deps?.fffModule, agentDir);
 
 	// Ripgrep fallback for multi_grep
 	const multiGrepFallback = deps?.multiGrepRipgrepFallback ?? runMultiGrepRipgrepFallback;
@@ -167,11 +167,11 @@ export default async function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrett
 	});
 
 	pi.on("session_shutdown", async () => {
-		// Intentionally do not destroy the native FFF finder on session shutdown.
+		// Intentionally keep the native FFF finder on session shutdown.
 		// Pi can emit shutdown/start during resume or session switching while the
-		// process keeps running. Native teardown during that transition has caused
-		// hard process crashes in published installs; let process exit reclaim it.
-		fffService = null;
+		// process keeps running. Native teardown, or dropping the JS handle while the
+		// native LMDB frecency env stays open, can make the next init fail with
+		// "environment already open in this program". Let process exit reclaim it.
 	});
 
 	// ------------------------------------------------------------------
