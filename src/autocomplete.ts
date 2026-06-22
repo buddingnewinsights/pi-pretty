@@ -5,11 +5,7 @@
  * suggestions with FFF frecency-ranked file search results.
  */
 
-import type {
-	AutocompleteItem,
-	AutocompleteProvider,
-	AutocompleteSuggestions,
-} from "@earendil-works/pi-tui";
+import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@earendil-works/pi-tui";
 import type { FileFinder } from "@ff-labs/fff-node";
 
 /** How many @-mention suggestions to show at most. */
@@ -53,12 +49,11 @@ export function createFffAutocompleteProvider(
 			try {
 				const result = finder.fileSearch(query, {
 					pageSize: MAX_SUGGESTIONS,
-					
 				});
 
 				if (result.ok) {
 					const items: AutocompleteItem[] = result.value.items.map((item) => ({
-						value: item.relativePath,
+						value: toMentionValue(item.relativePath),
 						label: item.fileName,
 						description: item.relativePath.slice(0, -(item.fileName.length + 1)),
 					}));
@@ -85,12 +80,12 @@ export function createFffAutocompleteProvider(
 			return current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
 		},
 
-		shouldTriggerFileCompletion(
-			lines: string[],
-			cursorLine: number,
-			cursorCol: number,
-		): boolean {
+		shouldTriggerFileCompletion(lines: string[], cursorLine: number, cursorCol: number): boolean {
 			return current.shouldTriggerFileCompletion?.(lines, cursorLine, cursorCol) ?? true;
 		},
 	};
+}
+
+function toMentionValue(path: string): string {
+	return /\s/.test(path) ? `@"${path.replaceAll('"', '\\"')}"` : `@${path}`;
 }

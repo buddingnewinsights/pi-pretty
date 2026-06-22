@@ -12,6 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createFffAutocompleteProvider } from "../src/autocomplete.js";
 import { CursorStore, fffFormatGrepText } from "../src/fff-helpers.js";
 import piPrettyExtension, { type PiPrettyDeps } from "../src/index.js";
 import {
@@ -23,6 +24,41 @@ import {
 // =========================================================================
 // 1. Unit tests — pure functions
 // =========================================================================
+
+describe("FFF autocomplete", () => {
+	it("returns @-mention completion values so it replaces Pi file autocomplete", async () => {
+		const finder = {
+			fileSearch: () => ({
+				ok: true,
+				value: {
+					items: [
+						{ relativePath: "src/index.ts", fileName: "index.ts" },
+						{ relativePath: "docs/file with space.md", fileName: "file with space.md" },
+					],
+				},
+			}),
+		};
+		const currentProvider = {
+			shouldTriggerFileCompletion: () => true,
+			getSuggestions: () => ({ items: [], prefix: "" }),
+			applyCompletion: (_input: string, _cursor: number, item: { value: string }) => ({
+				newInput: item.value,
+				newCursor: item.value.length,
+			}),
+		};
+
+		const provider = createFffAutocompleteProvider(currentProvider, () => finder);
+		const suggestions = await provider.getSuggestions(["@ind"], 0, 4, {
+			signal: new AbortController().signal,
+		});
+
+		expect(suggestions.prefix).toBe("@ind");
+		expect(suggestions.items.map((item) => item.value)).toEqual([
+			"@src/index.ts",
+			'@"docs/file with space.md"',
+		]);
+	});
+});
 
 describe("CursorStore", () => {
 	it("stores and retrieves a cursor", () => {
@@ -249,13 +285,16 @@ function mkFinder(overrides?: Record<string, any>) {
 	return {
 		isDestroyed: false,
 		waitForScan: vi.fn().mockResolvedValue({ ok: true, value: true }),
-    		fileSearch: vi.fn().mockReturnValue({
-    			ok: true,
-    			value: {
-    				items: [{ relativePath: "src/index.ts" }, { relativePath: "src/main.ts" }],
-    				totalMatched: 2,
-    			},
-    		}),
+		fileSearch: vi.fn().mockReturnValue({
+			ok: true,
+			value: {
+				items: [
+					{ relativePath: "src/index.ts", fileName: "index.ts" },
+					{ relativePath: "src/main.ts", fileName: "main.ts" },
+				],
+				totalMatched: 2,
+			},
+		}),
     		glob: vi.fn().mockReturnValue({
     			ok: true,
     			value: {
