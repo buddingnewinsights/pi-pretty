@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.15] - 2026-06-26
+
+### Added
+
+- **Bash** — `promptSnippet` and `promptGuidelines` added to encourage `rg -n` over
+  `grep` and document Rust regex alternation syntax (`|` = OR, `\|` = literal pipe).
+
 ## [0.6.12] - 2026-06-21
 
 ### Fixed

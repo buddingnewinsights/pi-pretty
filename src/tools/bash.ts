@@ -36,7 +36,14 @@ export function registerBashTool(
 	pi.registerTool({
 		name: "bash",
 		label: "Bash",
-		description: sdkTool.description ?? "Execute shell commands",
+		description: sdkTool.description
+			? `${sdkTool.description} For text search: \`rg -n\`.`
+			: "Execute shell commands. For text search: \`rg -n\`.",
+		promptSnippet: "Execute commands via bash. For text search: \`rg -n\`.",
+		promptGuidelines: [
+			"For text search: `rg -n`. If no results, try `rg -u` (respects .gitignore by default).",
+			"In rg: | means alternation, \\| means literal pipe. Opposite of GNU grep. Never use \\| for alternation.",
+		],
 		parameters: sdkTool.parameters,
 		renderShell: "self",
 
