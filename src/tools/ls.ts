@@ -7,7 +7,7 @@ import {
 	type AgentToolResult,
 } from "@earendil-works/pi-coding-agent";
 import type { SdkToolDef, LsDetails, TextContent, ComponentLike, ThemeLike, RenderCtxLike } from "../types.js";
-import { resolveBaseBackground, termWidth, MAX_PREVIEW_LINES, BG_BASE, BG_ERROR, FG_DIM, RST } from "../config.js";
+import { TOOL_RESULT_INDENT, resolveBaseBackground, termWidth, MAX_PREVIEW_LINES, BG_BASE, BG_ERROR, FG_DIM, RST } from "../config.js";
 import { shortPath } from "../helpers.js";
 import { wrapExecuteWithMetrics } from "./metrics.js";
 import { renderTree, renderToolError, renderToolMetrics, fillToolBackground } from "../render.js";
@@ -56,7 +56,7 @@ export function registerLsTool(
 			let out = theme.fg("toolTitle", theme.bold("ls"));
 			if (path) out += ` ${theme.fg("accent", path)}`;
 			if (limit !== undefined && limit !== null) out += theme.fg("toolOutput", ` (limit ${limit})`);
-			text.setText(fillToolBackground(`  \n  ${out}`, ctx.isError ? BG_ERROR : undefined));
+			text.setText(fillToolBackground(`\n${TOOL_RESULT_INDENT}${out}`, ctx.isError ? BG_ERROR : undefined));
 			return text;
 		},
 
@@ -70,20 +70,28 @@ export function registerLsTool(
 			}
 			const d = result.details as LsDetails | undefined;
 			if (d?._type === "lsResult" && d.text) {
+				if (!ctx.expanded) {
+					text.setText(
+						fillToolBackground(
+							`${TOOL_RESULT_INDENT}${FG_DIM}${d.entryCount} entries — ctrl+o to expand${RST}${renderToolMetrics(result)}\n`,
+						),
+					);
+					return text;
+				}
 				const rendered = renderTree(d.text, d.path)
 					.split("\n")
-					.map((l) => `  ${l}`)
+					.map((l) => `${TOOL_RESULT_INDENT}${l}`)
 					.join("\n");
 				text.setText(
 					fillToolBackground(
-						`  \n  ${FG_DIM}${d.entryCount} entries${RST}${renderToolMetrics(result)}\n${rendered}\n  `,
+						`\n${TOOL_RESULT_INDENT}${FG_DIM}${d.entryCount} entries${RST}${renderToolMetrics(result)}\n${rendered}\n`,
 					),
 				);
 				return text;
 			}
 			const fc = result.content?.[0];
 			text.setText(
-				fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`),
+				fillToolBackground(`${TOOL_RESULT_INDENT}${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`),
 			);
 			return text;
 		},

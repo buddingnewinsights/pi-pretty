@@ -5,6 +5,8 @@
 
 A [pi](https://pi.dev) extension that upgrades built-in tool output in the terminal and includes built-in FFF-powered search for `find`/`grep`.
 
+Tool **result bodies** start **collapsed** (header + line count). Use Pi **Ctrl+O** (`app.tools.expand`) on a tool block to show full output; **Ctrl+Shift+O** expands all. See [Pi keybindings](https://pi.dev/docs/latest/keybindings).
+
 It currently enhances:
 
 - **`read`**: syntax-highlighted text previews with line numbers, plus inline image rendering when the terminal supports it

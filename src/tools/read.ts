@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { SdkToolDef, ReadDetails, TextContent, ComponentLike, ThemeLike, RenderCtxLike } from "../types.js";
 import {
+	TOOL_RESULT_INDENT,
 	resolveBaseBackground,
 	termWidth,
 	MAX_PREVIEW_LINES,
@@ -124,7 +125,7 @@ export function registerReadTool(
 				const fc = result.content?.[0];
 				text.setText(
 					fillToolBackground(
-						`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 80) : `[image: ${d.filePath}]`)}`,
+						`${TOOL_RESULT_INDENT}${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 80) : `[image: ${d.filePath}]`)}`,
 					),
 				);
 				return text;
@@ -135,28 +136,36 @@ export function registerReadTool(
 				const tw = termWidth();
 				const lines = d.content.split("\n");
 				const total = lines.length;
-				const maxShow = ctx.expanded ? lines.length : Math.min(lines.length, MAX_PREVIEW_LINES);
+				const p2 = shortPath(cwd, home, String(d.filePath ?? ""));
+				const off2 = typeof d.offset === "number" ? `:${d.offset}` : "";
+				if (!ctx.expanded) {
+					text.setText(
+						fillToolBackground(
+							`\n${TOOL_RESULT_INDENT}${theme.fg("toolTitle", theme.bold("read"))} ${theme.fg("accent", p2)}${theme.fg("dim", off2)}\n${TOOL_RESULT_INDENT}${FG_DIM}${total} lines — ctrl+o to expand${RST}\n`,
+						),
+					);
+					return text;
+				}
+				const maxShow = lines.length;
 				const show = lines.slice(0, maxShow);
 				const nw = Math.max(3, String(total).length);
 				const gw = nw + 3;
 				const cw = Math.max(1, tw - gw);
 
-				const p2 = shortPath(cwd, home, String(d.filePath ?? ""));
-				const off2 = typeof d.offset === "number" ? `:${d.offset}` : "";
 				const header = `${theme.fg("toolTitle", theme.bold("read"))} ${theme.fg("accent", p2)}${theme.fg("dim", off2)}`;
-				const out: string[] = ["", `  ${header}`];
-				out.push(`  ${FG_RULE}${"─".repeat(tw - 2)}${RST}`);
+				const out: string[] = ["", `${TOOL_RESULT_INDENT}${header}`];
+				out.push(`${TOOL_RESULT_INDENT}${FG_RULE}${"─".repeat(tw - 1)}${RST}`);
 				for (let i = 0; i < show.length; i++) {
 					const ln = (d.offset || 0) + i + 1;
 					const code = show[i] ?? "";
 					const display = code.length > cw ? code.slice(0, cw) + `${FG_DIM}›${RST}` : code;
 					const lineNo = String(ln);
 					out.push(
-						`  ${FG_LNUM}${" ".repeat(Math.max(0, nw - lineNo.length))}${lineNo}${RST} ${FG_RULE}│${RST} ${display}${RST}`,
+						`${TOOL_RESULT_INDENT}${FG_LNUM}${" ".repeat(Math.max(0, nw - lineNo.length))}${lineNo}${RST} ${FG_RULE}│${RST} ${display}${RST}`,
 					);
 				}
 				if (total > maxShow) {
-					out.push(`  ${FG_DIM}  … ${total - maxShow} more lines (${total} total)${RST}`);
+					out.push(`${TOOL_RESULT_INDENT}${FG_DIM}… ${total - maxShow} more lines (${total} total)${RST}`);
 				}
 				out.push("");
 				const rendered = out.join("\n");
@@ -168,9 +177,9 @@ export function registerReadTool(
 					.then((hl) => {
 						const padded = hl
 							.split("\n")
-							.map((l) => `  ${l}`)
+							.map((l) => `${TOOL_RESULT_INDENT}${l}`)
 							.join("\n");
-						const rendered = `\n  ${header}\n${padded}\n`;
+						const rendered = `\n${TOOL_RESULT_INDENT}${header}\n${padded}\n`;
 						text.setText(fillToolBackground(rendered));
 						(ctx as any).state._rt = rendered;
 					})
@@ -181,7 +190,7 @@ export function registerReadTool(
 
 			const fc = result.content?.[0];
 			text.setText(
-				fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`),
+				fillToolBackground(`${TOOL_RESULT_INDENT}${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`),
 			);
 			return text;
 		},

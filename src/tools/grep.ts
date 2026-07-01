@@ -7,7 +7,7 @@ import {
 	type AgentToolResult,
 } from "@earendil-works/pi-coding-agent";
 import type { SdkToolDef, GrepDetails, FffServiceWithCursor, TextContent, ThemeLike, RenderCtxLike } from "../types.js";
-import { MAX_PREVIEW_LINES, BG_ERROR, resolveBaseBackground } from "../config.js";
+import { TOOL_RESULT_INDENT, MAX_PREVIEW_LINES, BG_ERROR, FG_DIM, RST, resolveBaseBackground } from "../config.js";
 import { shortPath, normalizeLineEndings } from "../helpers.js";
 import { wrapExecuteWithMetrics } from "./metrics.js";
 import { renderToolError, fillToolBackground } from "../render.js";
@@ -116,7 +116,7 @@ export function registerGrepTool(
 			if (limit !== undefined && limit !== null) out += theme.fg("dim", ` limit ${limit}`);
 			if (literal) out += theme.fg("dim", ` (literal)`);
 			if (caseInsensitive) out += theme.fg("dim", ` (case-insensitive)`);
-			text.setText(fillToolBackground(`\n  ${out}`, ctx.isError ? BG_ERROR : undefined));
+			text.setText(fillToolBackground(`\n${TOOL_RESULT_INDENT}${out}`, ctx.isError ? BG_ERROR : undefined));
 			return text;
 		},
 
@@ -138,7 +138,16 @@ export function registerGrepTool(
 			const d = result.details as GrepDetails | undefined;
 			if (d?._type === "grepResult" && d.text) {
 				const lines = d.text.split("\n");
-				const maxShow = ctx.expanded ? lines.length : Math.min(lines.length, MAX_PREVIEW_LINES);
+				if (!ctx.expanded) {
+					text.setText(
+						fillToolBackground(
+							`${TOOL_RESULT_INDENT}${FG_DIM}${lines.length} lines — ctrl+o to expand${RST}\n`,
+							ctx.isError ? BG_ERROR : undefined,
+						),
+					);
+					return text;
+				}
+				const maxShow = lines.length;
 				const show = lines.slice(0, maxShow);
 				const remaining = lines.length - maxShow;
 				const out: string[] = [];
@@ -149,13 +158,13 @@ export function registerGrepTool(
 				if (remaining > 0) {
 					out.push(theme.fg("muted", `… (${remaining} more ${remaining === 1 ? "line" : "lines"}, to expand)`));
 				}
-				const body = out.map((l) => `  ${l}`).join("\n") + "\n\n";
+				const body = out.map((l) => `${TOOL_RESULT_INDENT}${l}`).join("\n") + "\n\n";
 				text.setText(fillToolBackground(body, ctx.isError ? BG_ERROR : undefined));
 				return text;
 			}
 			const fc = result.content?.[0];
 			const fallback = fc && "text" in fc ? String(fc.text).slice(0, 120) : "no matches";
-			text.setText(fillToolBackground(`  ${theme.fg("dim", fallback)}`, ctx.isError ? BG_ERROR : undefined));
+			text.setText(fillToolBackground(`${TOOL_RESULT_INDENT}${theme.fg("dim", fallback)}`, ctx.isError ? BG_ERROR : undefined));
 			return text;
 		},
 	} as unknown as ToolDefinition<any, any, any>);

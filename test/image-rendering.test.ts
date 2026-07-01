@@ -4,6 +4,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import piPrettyExtension, { __imageInternals } from "../src/index.js";
 
+const mockTheme = {
+	fg: (_key: string, text: string) => text,
+	bold: (text: string) => text,
+};
+
 const ENV_KEYS = [
 	"TMUX",
 	"TERM",
@@ -136,7 +141,7 @@ describe("image rendering terminal detection", () => {
 		}));
 
 		const result = await readTool.execute("t1", { path: "media/inline-image.png" }, null, null, {});
-		const rendered = readTool.renderResult(result, {}, {}, {
+		const rendered = readTool.renderResult(result, {}, mockTheme, {
 			lastComponent: new MockText(),
 			isError: false,
 			state: {},
@@ -144,7 +149,7 @@ describe("image rendering terminal detection", () => {
 			invalidate: () => {},
 		});
 
-		expect(rendered.getText()).toContain("image/png");
+		expect(rendered.getText()).toContain("inline-image.png");
 		expect(rendered.getText()).not.toContain("\x1b_G");
 		expect(result.content).toEqual([
 			{ type: "image", data: Buffer.from("fake").toString("base64"), mimeType: "image/png" },

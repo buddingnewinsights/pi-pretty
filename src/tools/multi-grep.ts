@@ -16,7 +16,7 @@ import type {
 	ThemeLike,
 	RenderCtxLike,
 } from "../types.js";
-import { resolveBaseBackground, MAX_PREVIEW_LINES, BG_ERROR, FG_DIM, FG_LNUM, FG_RULE, RST } from "../config.js";
+import { TOOL_RESULT_INDENT, resolveBaseBackground, MAX_PREVIEW_LINES, BG_ERROR, FG_DIM, FG_LNUM, FG_RULE, RST } from "../config.js";
 import { shortPath, normalizeLineEndings } from "../helpers.js";
 import { wrapExecuteWithMetrics } from "./metrics.js";
 import { renderToolError, renderToolMetrics, fillToolBackground } from "../render.js";
@@ -256,7 +256,7 @@ export function registerMultiGrepTool(
 			let out = `${theme.fg("toolTitle", theme.bold("mgrep"))} ${theme.fg("accent", `/${patternStr || ""}/`)}${theme.fg("toolOutput", ` in ${path}`)}`;
 			if (literal) out += theme.fg("dim", ` (literal)`);
 			if (limit !== undefined) out += theme.fg("dim", ` limit ${limit}`);
-			text.setText(fillToolBackground(`\n  ${out}`, ctx.isError ? BG_ERROR : undefined));
+			text.setText(fillToolBackground(`\n${TOOL_RESULT_INDENT}${out}`, ctx.isError ? BG_ERROR : undefined));
 			return text;
 		},
 
@@ -271,7 +271,15 @@ export function registerMultiGrepTool(
 			const d = result.details as GrepDetails | undefined;
 			if (d?._type === "grepResult" && d.text) {
 				const lines = d.text.split("\n");
-				const maxShow = ctx.expanded ? lines.length : Math.min(lines.length, MAX_PREVIEW_LINES);
+				if (!ctx.expanded) {
+					text.setText(
+						fillToolBackground(
+							`${TOOL_RESULT_INDENT}${FG_DIM}${lines.length} lines — ctrl+o to expand${RST}${renderToolMetrics(result)}\n`,
+						),
+					);
+					return text;
+				}
+				const maxShow = lines.length;
 				const show = lines.slice(0, maxShow);
 				const nw = Math.max(3, 5);
 
@@ -288,27 +296,27 @@ export function registerMultiGrepTool(
 						const [, file, lineNo, content] = fileMatch;
 						if (file !== currentFile) {
 							if (currentFile) out.push("");
-							out.push(`  ${theme.fg("accent", theme.bold(file))}`);
+							out.push(`${TOOL_RESULT_INDENT}${theme.fg("accent", theme.bold(file))}`);
 							currentFile = file;
 						}
 						let display = content;
 						if (hlRe) display = content.replace(hlRe, (m) => `${RST}${theme.fg("warning", theme.bold(m))}${RST}`);
 						const padded = `${FG_LNUM}${String(lineNo).padStart(nw)}${RST} ${FG_RULE}│${RST} ${display}${RST}`;
-						out.push(`  ${padded}`);
+						out.push(`${TOOL_RESULT_INDENT}${padded}`);
 					} else if (line.trim()) {
-						out.push(`  ${FG_DIM}  ${line.trim()}${RST}`);
+						out.push(`${TOOL_RESULT_INDENT}${FG_DIM}${line.trim()}${RST}`);
 					}
 				}
 				const preview = out.join("\n");
-				const more = lines.length > maxShow ? `\n${FG_DIM}  ... ${lines.length - maxShow} more lines${RST}` : "";
+				const more = lines.length > maxShow ? `\n${TOOL_RESULT_INDENT}${FG_DIM}... ${lines.length - maxShow} more lines${RST}` : "";
 				text.setText(
-					fillToolBackground(`  ${FG_DIM}${d.matchCount} matches${RST}${renderToolMetrics(result)}\n${preview}${more}`),
+					fillToolBackground(`${TOOL_RESULT_INDENT}${FG_DIM}${d.matchCount} matches${RST}${renderToolMetrics(result)}\n${preview}${more}`),
 				);
 				return text;
 			}
 			const fc = result.content?.[0];
 			text.setText(
-				fillToolBackground(`  ${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "no matches")}`),
+				fillToolBackground(`${TOOL_RESULT_INDENT}${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "no matches")}`),
 			);
 			return text;
 		},

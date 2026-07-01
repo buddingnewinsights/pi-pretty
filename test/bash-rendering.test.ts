@@ -1,5 +1,5 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import piPrettyExtension from "../src/index.js";
 
@@ -79,6 +79,10 @@ function loadBashTool() {
 }
 
 describe("bash renderCall expansion", () => {
+	beforeEach(() => {
+		process.stdout.columns = 100;
+	});
+
 	it("truncates long commands when collapsed", () => {
 		const bashTool = loadBashTool();
 		const command = `printf '${"x".repeat(120)}'`;
@@ -91,7 +95,7 @@ describe("bash renderCall expansion", () => {
 			invalidate: () => {},
 		});
 
-		expect(rendered.getText()).toContain("bash");
+		expect(rendered.getText()).toContain("$");
 		expect(rendered.getText()).toContain("…");
 		expect(rendered.getText()).not.toContain(command);
 	});
@@ -143,7 +147,7 @@ describe("bash renderCall expansion", () => {
 				lastComponent: new MockText(),
 				isError: false,
 				state: {},
-				expanded: true,
+				expanded: false,
 				invalidate: () => {},
 			});
 
@@ -162,7 +166,7 @@ describe("bash renderCall expansion", () => {
 				lastComponent: new MockText(),
 				isError: false,
 				state: {},
-				expanded: true,
+				expanded: false,
 				invalidate: () => {},
 			});
 
@@ -184,14 +188,14 @@ describe("bash renderCall expansion", () => {
 			});
 
 			const lines = stripAnsi(rendered.getText()).split("\n");
-			expect(lines[1]).toMatch(/^  \$ false/);
+			expect(lines[1]).toMatch(/^ \$ false/);
 		});
 	});
 
-	it("pads every line of multi-line tool errors", () => {
+	it("collapses multi-line tool errors until expanded", () => {
 		withStdoutColumns(48, () => {
 			const bashTool = loadBashTool();
-			const rendered = bashTool.renderResult(
+			const collapsed = bashTool.renderResult(
 				{ content: [{ type: "text", text: "\nfirst error\n\n\nsecond error\n" }] },
 				{},
 				ansiMockTheme,
@@ -203,14 +207,27 @@ describe("bash renderCall expansion", () => {
 					invalidate: () => {},
 				},
 			);
+			const collapsedLines = stripAnsi(collapsed.getText()).split("\n");
+			expect(collapsedLines[0]).toContain("✗ exit 1");
+			expect(collapsedLines.some((l) => l.includes("ctrl+o"))).toBe(true);
+			expect(collapsedLines.some((l) => l.includes("first error"))).toBe(false);
 
-			const lines = stripAnsi(rendered.getText()).split("\n");
-			expect(lines[0]).toContain("✗ exit 1");
+			const expanded = bashTool.renderResult(
+				{ content: [{ type: "text", text: "\nfirst error\n\n\nsecond error\n" }] },
+				{},
+				ansiMockTheme,
+				{
+					lastComponent: new MockText(),
+					isError: true,
+					state: {},
+					expanded: true,
+					invalidate: () => {},
+				},
+			);
+			const lines = stripAnsi(expanded.getText()).split("\n");
 			expect(lines[1]).toMatch(/^─+$/);
-			expect(lines[2]).toMatch(/^  first error/);
-			expect(lines[3]).toMatch(/^  /);
-			expect(lines[3].trim()).toBe("");
-			expect(lines[4]).toMatch(/^  second error/);
+			expect(lines[2]).toMatch(/^ first error/);
+			expect(lines[4]).toMatch(/^ second error/);
 		});
 	});
 
@@ -253,7 +270,7 @@ describe("bash renderCall expansion", () => {
 					lastComponent: new MockText(),
 					isError: false,
 					state: {},
-					expanded: false,
+					expanded: true,
 					invalidate: () => {},
 				},
 			);

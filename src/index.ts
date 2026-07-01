@@ -25,6 +25,7 @@ import { registerMultiGrepTool } from "./tools/multi-grep.js";
 import { runMultiGrepRipgrepFallback } from "./multi-grep-fallback.js";
 import { getDefaultAgentDir } from "./config.js";
 import { createFffAutocompleteProvider } from "./autocomplete.js";
+import { registerDefaultCollapsedToolOutput } from "./expand.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -48,6 +49,7 @@ export type { PiPrettyDeps };
 export default async function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrettyDeps): Promise<void> {
 	const disabledTools = envDisabledTools();
 	const isToolEnabled = (name: string) => !disabledTools.has(name.toLowerCase());
+	registerDefaultCollapsedToolOutput(pi);
 	const cwd = process.cwd();
 
 	// ------------------------------------------------------------------

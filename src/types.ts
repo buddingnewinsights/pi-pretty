@@ -73,6 +73,7 @@ export interface FindDetails extends Record<string, unknown> {
 	text: string;
 	pattern: string;
 	matchCount: number;
+	notices?: string[];
 }
 
 export interface GrepDetails extends Record<string, unknown> {

@@ -9,6 +9,9 @@ import { basename, extname, join } from "node:path";
 // ANSI
 // ---------------------------------------------------------------------------
 
+/** Left indent for rendered tool result lines (was two spaces; one matches tighter TUI layout). */
+export const TOOL_RESULT_INDENT = " ";
+
 export let RST = "\x1b[0m";
 const BOLD = "\x1b[1m";
 

@@ -10,6 +10,7 @@ import { codeToANSI } from "@shikijs/cli";
 import { basename, dirname } from "node:path";
 
 import {
+	TOOL_RESULT_INDENT,
 	RST,
 	FG_LNUM,
 	FG_DIM,
@@ -168,9 +169,15 @@ export function fillToolBackground(text: string, bg = BG_BASE, width?: number): 
 	return text
 		.split("\n")
 		.map((line) => {
-			const fitted = width ? _truncateToWidth(line, width, "") : line;
+			if (!width) {
+				const stripped = preserveBoxBackground(line);
+				return bg ? bg + stripped : stripped;
+			}
+			const plainLead = line.replace(/\x1b\[[0-9;]*m/g, "");
+			const skipPad =
+				line.startsWith(TOOL_RESULT_INDENT) || plainLead.startsWith(TOOL_RESULT_INDENT);
+			const fitted = _truncateToWidth(line, width, "", !skipPad);
 			const stripped = preserveBoxBackground(fitted);
-			// Apply background to the entire line
 			return bg ? bg + stripped : stripped;
 		})
 		.join("\n");
@@ -204,7 +211,7 @@ export function renderToolMetrics(result: AgentToolResult<Record<string, unknown
 
 export function renderToolError(error: string, theme: ThemeLike): string {
 	const body = compactErrorLines(error)
-		.map((line) => `  ${line ? theme.fg("error", line) : ""}`)
+		.map((line) => `${TOOL_RESULT_INDENT}${line ? theme.fg("error", line) : ""}`)
 		.join("\n");
 	return fillToolBackground(body, BG_ERROR);
 }
@@ -253,7 +260,7 @@ export function renderBashOutput(text: string, exitCode: number | null): { summa
 	const remaining = lines.length - maxShow;
 
 	let body = show.join("\n");
-	if (remaining > 0) body += `\n${FG_DIM}  … ${remaining} more lines${RST}`;
+	if (remaining > 0) body += `\n${TOOL_RESULT_INDENT}${FG_DIM}… ${remaining} more lines${RST}`;
 
 	return { summary: codeStr, body };
 }
@@ -318,10 +325,10 @@ export function renderFindResults(text: string, theme?: ThemeLike): string {
 				const more = theme
 					? theme.fg("dim", `… ${lines.length - count} more files`)
 					: `${FG_DIM}… ${lines.length - count} more files${RST}`;
-				out.push(`  ${more}`);
+				out.push(`${TOOL_RESULT_INDENT}${more}`);
 				return out.join("\n");
 			}
-			out.push(`  ${files[i]}`);
+			out.push(`${TOOL_RESULT_INDENT}${files[i]}`);
 			count++;
 		}
 	}
@@ -364,10 +371,10 @@ export async function renderGrepResults(text: string, pattern: string): Promise<
 			const nw = Math.max(3, lineNo.length);
 			let display = content;
 			if (re) display = content.replace(re, `${RST}${FG_YELLOW}\x1b[1m$1${RST}`);
-			out.push(`  ${lnum(Number(lineNo), nw)} ${FG_RULE}│${RST} ${display}${RST}`);
+			out.push(`${TOOL_RESULT_INDENT}${lnum(Number(lineNo), nw)} ${FG_RULE}│${RST} ${display}${RST}`);
 			count++;
 		} else if (line.trim() === "--") {
-			out.push(`  ${FG_DIM}  ···${RST}`);
+			out.push(`${TOOL_RESULT_INDENT}${FG_DIM}  ···${RST}`);
 		} else if (line.trim()) {
 			out.push(line);
 			count++;
@@ -407,9 +414,9 @@ export function makeRenderResult() {
 			const preview = lines.slice(0, maxShow).join("\n");
 			const more = lines.length > maxShow ? `\n${FG_DIM}... ${lines.length - maxShow} more lines${RST}` : "";
 			const metrics = renderToolMetrics(result);
-			text.setText(fillToolBackground(`  ${preview}${more}${metrics ? `\n  ${metrics}` : ""}`, undefined, renderWidth));
+			text.setText(fillToolBackground(`${TOOL_RESULT_INDENT}${preview}${more}${metrics ? `\n${TOOL_RESULT_INDENT}${metrics}` : ""}`, undefined, renderWidth));
 		} else {
-			text.setText(fillToolBackground(`  ${theme.fg("dim", "(no text output)")}`));
+			text.setText(fillToolBackground(`${TOOL_RESULT_INDENT}${theme.fg("dim", "(no text output)")}`));
 		}
 		return text;
 	};
