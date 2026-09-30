@@ -139,6 +139,7 @@ export interface SdkToolDef {
 	promptSnippet?: string;
 	promptGuidelines?: string[];
 	constrainedSampling?: false | ConstrainedSamplingConfig;
+	outputSchema?: unknown;
 	execute: (...args: any[]) => Promise<AgentToolResult<any>>;
 }
 

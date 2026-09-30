@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.30] - 2026-09-30
+
+### Fixed
+
+- Preserve the SDK bash tool's optional `outputSchema` when pi-pretty re-registers it, retaining structured-result schema metadata.
+
+### Maintenance
+
+- Update Pi development SDK dependencies from `^0.85.0` to `^0.87.0`.
+
 ## [0.6.29] - 2026-09-14
 
 ### Fixed

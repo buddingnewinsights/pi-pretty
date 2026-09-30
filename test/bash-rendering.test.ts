@@ -92,6 +92,22 @@ function registerBashToolWith(sdkTool: SdkToolDef) {
 	return registerTool.mock.calls[0]?.[0];
 }
 
+describe("bash output schema", () => {
+	it("forwards the SDK schema for structured Codemode results", () => {
+		const outputSchema = {
+			type: "object",
+			properties: { output: { type: "string" } },
+		};
+		const tool = registerBashToolWith({
+			parameters: {},
+			outputSchema,
+			execute: vi.fn(),
+		});
+
+		expect(tool.outputSchema).toBe(outputSchema);
+	});
+});
+
 describe("bash ripgrep guidance", () => {
 	it("merges the host guidelines with the ripgrep guidance", () => {
 		const tool = registerBashToolWith({

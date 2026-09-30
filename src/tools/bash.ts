@@ -92,6 +92,7 @@ export function registerBashTool(
 		],
 		parameters: sdkTool.parameters,
 		constrainedSampling: sdkTool.constrainedSampling,
+		outputSchema: sdkTool.outputSchema,
 		renderShell: "self",
 
 		execute: wrapExecuteWithMetrics(async (tid, params, sig, upd, ctx: ExtensionContext) => {
