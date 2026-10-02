@@ -42,10 +42,10 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.5",
-		"@earendil-works/pi-ai": "^0.87.0",
-		"@earendil-works/pi-coding-agent": "^0.87.0",
-		"@earendil-works/pi-server": "^0.87.0",
-		"@earendil-works/pi-tui": "^0.87.0",
+		"@earendil-works/pi-ai": "1.0.0",
+		"@earendil-works/pi-coding-agent": "1.0.0",
+		"@earendil-works/pi-server": "1.0.0",
+		"@earendil-works/pi-tui": "1.0.0",
 		"@types/node": "^20.0.0",
 		"typescript": "^5.0.0",
 		"vitest": "^4.0.18"
