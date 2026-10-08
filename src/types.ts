@@ -35,6 +35,10 @@ export interface RenderCtxLike {
 	state: Record<string, unknown>;
 	expanded?: boolean;
 	invalidate?: () => void;
+	/** Host horizontal padding (pi >= 1.1). Absent on older hosts; renderers fall back to 1. */
+	outputPad?: number;
+	/** Final host-measured execution time in ms; undefined while running or on older hosts. */
+	durationMs?: number;
 }
 
 export interface TextLike {

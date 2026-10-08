@@ -1,7 +1,7 @@
 /* pi-pretty: ls tool -- directory listing with styled output. */
 
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { BG_ERROR, FG_DIM, RST, resolveBaseBackground, TOOL_RESULT_INDENT } from "../config.js";
+import { BG_ERROR, FG_DIM, RST, resolveBaseBackground } from "../config.js";
 import { shortPath } from "../helpers.js";
 import {
 	fillToolBackground,
@@ -11,6 +11,7 @@ import {
 	renderToolMetrics,
 	renderTree,
 	setCollapsedToolTitle,
+	toolIndent,
 } from "../render.js";
 import { resolveTextCtor } from "../tui-text.js";
 import type { LsDetails, RenderCtxLike, SdkToolDef, TextContent, ThemeLike } from "../types.js";
@@ -60,8 +61,9 @@ export function registerLsTool(
 			let out = theme.fg("toolTitle", theme.bold("ls"));
 			if (path) out += ` ${theme.fg("accent", path)}`;
 			if (limit !== undefined && limit !== null) out += theme.fg("toolOutput", ` (limit ${limit})`);
+			const ind = toolIndent(ctx);
 			const renderTitle = (suffix = ""): string =>
-				fillToolBackground(`\n${TOOL_RESULT_INDENT}${out}${suffix}\n`, ctx.isError ? BG_ERROR : undefined);
+				fillToolBackground(`\n${ind}${out}${suffix}\n`, ctx.isError ? BG_ERROR : undefined, undefined, ind);
 			rememberToolTitle(ctx, text, renderTitle);
 			text.setText(renderTitle());
 			return text;
@@ -71,25 +73,29 @@ export function registerLsTool(
 			resolveBaseBackground(theme);
 
 			const text = ctx.lastComponent ?? new TC("", 0, 0);
+			const ind = toolIndent(ctx);
 			if (ctx.isError) {
-				text.setText(renderToolError(getText(result) || "Error", theme));
+				text.setText(renderToolError(getText(result) || "Error", theme, ind));
 				return text;
 			}
 			const d = result.details as LsDetails | undefined;
 			if (d?._type === "lsResult" && d.text) {
 				if (!ctx.expanded) {
-					const summary = `${FG_DIM}${d.entryCount} entries — ctrl+o to expand${RST}${renderToolMetrics(result)}`;
+					const summary = `${FG_DIM}${d.entryCount} entries — ctrl+o to expand${RST}${renderToolMetrics(result, ctx)}`;
 					if (setCollapsedToolTitle(ctx, text, ` ${summary}`)) return text;
-					text.setText(fillToolBody(`${TOOL_RESULT_INDENT}${summary}`));
+					text.setText(fillToolBody(`${ind}${summary}`, undefined, undefined, ind));
 					return text;
 				}
 				const rendered = renderTree(d.text, d.path)
 					.split("\n")
-					.map((l) => `${TOOL_RESULT_INDENT}${l}`)
+					.map((l) => `${ind}${l}`)
 					.join("\n");
 				text.setText(
 					fillToolBody(
-						`${TOOL_RESULT_INDENT}${FG_DIM}${d.entryCount} entries${RST}${renderToolMetrics(result)}\n${rendered}`,
+						`${ind}${FG_DIM}${d.entryCount} entries${RST}${renderToolMetrics(result, ctx)}\n${rendered}`,
+						undefined,
+						undefined,
+						ind,
 					),
 				);
 				return text;
@@ -97,7 +103,10 @@ export function registerLsTool(
 			const fc = result.content?.[0];
 			text.setText(
 				fillToolBody(
-					`${TOOL_RESULT_INDENT}${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`,
+					`${ind}${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`,
+					undefined,
+					undefined,
+					ind,
 				),
 			);
 			return text;

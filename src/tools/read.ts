@@ -3,19 +3,9 @@
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { getReadmePath } from "@earendil-works/pi-coding-agent";
-import {
-	BG_BASE,
-	BG_ERROR,
-	FG_DIM,
-	FG_LNUM,
-	FG_RULE,
-	RST,
-	resolveBaseBackground,
-	TOOL_RESULT_INDENT,
-	termWidth,
-} from "../config.js";
+import { BG_BASE, BG_ERROR, FG_DIM, FG_LNUM, FG_RULE, RST, resolveBaseBackground, termWidth } from "../config.js";
 import { normalizeLineEndings, shortPath } from "../helpers.js";
-import { fillToolBackground, fillToolBody, renderFileContent, renderToolError } from "../render.js";
+import { fillToolBackground, fillToolBody, renderFileContent, renderToolError, toolIndent } from "../render.js";
 import { resolveTextCtor } from "../tui-text.js";
 import type { ReadDetails, RenderCtxLike, SdkToolDef, TextContent, ThemeLike } from "../types.js";
 import { wrapExecuteWithMetrics } from "./metrics.js";
@@ -79,6 +69,7 @@ export function registerReadTool(
 		promptSnippet: sdkTool.promptSnippet,
 		promptGuidelines: sdkTool.promptGuidelines,
 		constrainedSampling: sdkTool.constrainedSampling,
+		outputSchema: sdkTool.outputSchema as ToolDefinition["outputSchema"],
 		renderShell: "self",
 
 		execute: wrapExecuteWithMetrics(async (tid, params, sig, _upd, ctx: ExtensionContext) => {
@@ -114,9 +105,10 @@ export function registerReadTool(
 				return text;
 			}
 
+			const ind = toolIndent(ctx);
 			const path = String(args.path ?? "");
 			const label = theme.fg("error", theme.bold("→ read"));
-			text.setText(fillToolBackground(`\n${TOOL_RESULT_INDENT}${label} ${theme.fg("toolTitle", path)}\n`, BG_ERROR));
+			text.setText(fillToolBackground(`\n${ind}${label} ${theme.fg("toolTitle", path)}\n`, BG_ERROR, undefined, ind));
 			return text;
 		},
 
@@ -125,9 +117,10 @@ export function registerReadTool(
 
 			const renderToken = nextReadRenderToken(ctx);
 			const text = ctx.lastComponent ?? new TC("", 0, 0);
+			const ind = toolIndent(ctx);
 
 			if (ctx.isError) {
-				text.setText(renderToolError(getText(result) || "Error", theme));
+				text.setText(renderToolError(getText(result) || "Error", theme, ind));
 				return text;
 			}
 
@@ -155,7 +148,7 @@ export function registerReadTool(
 				if (!ctx.expanded) {
 					if (skillName) {
 						const header = renderSkillHeader(skillName, false, theme);
-						text.setText(fillToolBody(`\n${TOOL_RESULT_INDENT}${header}\n`, BG_BASE));
+						text.setText(fillToolBody(`\n${ind}${header}\n`, BG_BASE, undefined, ind));
 						return text;
 					}
 					const docsLabel = getPiDocsLabel(filePath, cwd);
@@ -164,8 +157,10 @@ export function registerReadTool(
 						: `${theme.fg("toolTitle", theme.bold("→ read"))} ${theme.fg("toolTitle", p2)}`;
 					text.setText(
 						fillToolBody(
-							`\n${TOOL_RESULT_INDENT}${title}${theme.fg("dim", off2)} ${FG_DIM}${total} lines — ctrl+o to expand${RST}`,
+							`\n${ind}${title}${theme.fg("dim", off2)} ${FG_DIM}${total} lines — ctrl+o to expand${RST}`,
 							BG_BASE,
+							undefined,
+							ind,
 						),
 					);
 					return text;
@@ -175,7 +170,8 @@ export function registerReadTool(
 				const offset = d.offset || 0;
 				const nw = Math.max(3, String(offset + total).length);
 				const gw = nw + 3;
-				const cw = Math.max(1, tw - gw);
+				// Default pad 1 keeps its historical budget; extra padding is subtracted so rows do not grow.
+				const cw = Math.max(1, tw - gw - Math.max(0, ind.length - 1));
 
 				const header = skillName
 					? renderSkillHeader(skillName, true, theme)
@@ -189,27 +185,27 @@ export function registerReadTool(
 				};
 				const cachedHighlight = getCachedReadHighlight(ctx, highlightRequest);
 				if (cachedHighlight !== undefined) {
-					const highlighted = buildHighlightedRead(cachedHighlight, header, skillName, offset, nw, tw);
-					text.setText(fillToolBody(highlighted, BG_BASE));
+					const highlighted = buildHighlightedRead(cachedHighlight, header, skillName, offset, nw, tw, ind);
+					text.setText(fillToolBody(highlighted, BG_BASE, undefined, ind));
 					return text;
 				}
 
-				const out: string[] = ["", `${TOOL_RESULT_INDENT}${header}`, ""];
-				out.push(`${TOOL_RESULT_INDENT}${FG_RULE}${"─".repeat(tw - 1)}${RST}`);
+				const out: string[] = ["", `${ind}${header}`, ""];
+				out.push(`${ind}${FG_RULE}${"─".repeat(Math.max(1, tw - ind.length))}${RST}`);
 				for (let i = 0; i < show.length; i++) {
 					const ln = offset + i + 1;
 					const code = show[i] ?? "";
 					const display = code.length > cw ? `${code.slice(0, Math.max(0, cw - 1))}${FG_DIM}›${RST}` : code;
 					const lineNo = String(ln);
 					out.push(
-						`${TOOL_RESULT_INDENT}${FG_LNUM}${" ".repeat(Math.max(0, nw - lineNo.length))}${lineNo}${RST} ${FG_RULE}│${RST} ${display}${RST}`,
+						`${ind}${FG_LNUM}${" ".repeat(Math.max(0, nw - lineNo.length))}${lineNo}${RST} ${FG_RULE}│${RST} ${display}${RST}`,
 					);
 				}
 				if (total > maxShow) {
-					out.push(`${TOOL_RESULT_INDENT}${FG_DIM}… ${total - maxShow} more lines (${total} total)${RST}`);
+					out.push(`${ind}${FG_DIM}… ${total - maxShow} more lines (${total} total)${RST}`);
 				}
 				const rendered = out.join("\n");
-				text.setText(fillToolBody(rendered, BG_BASE));
+				text.setText(fillToolBody(rendered, BG_BASE, undefined, ind));
 
 				// Async syntax highlighting via Shiki. The component is reused across
 				// expansion changes, so stale work must not restore an older view.
@@ -217,8 +213,8 @@ export function registerReadTool(
 					.then((hl) => {
 						if (!isCurrentReadRender(ctx, renderToken)) return;
 						setCachedReadHighlight(ctx, highlightRequest, hl);
-						const highlighted = buildHighlightedRead(hl, header, skillName, offset, nw, tw);
-						text.setText(fillToolBody(highlighted, BG_BASE));
+						const highlighted = buildHighlightedRead(hl, header, skillName, offset, nw, tw, ind);
+						text.setText(fillToolBody(highlighted, BG_BASE, undefined, ind));
 						ctx.invalidate?.();
 					})
 					.catch(() => {});
@@ -229,8 +225,10 @@ export function registerReadTool(
 			const fc = result.content?.[0];
 			text.setText(
 				fillToolBody(
-					`${TOOL_RESULT_INDENT}${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`,
+					`${ind}${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`,
 					BG_BASE,
+					undefined,
+					ind,
 				),
 			);
 			return text;
@@ -293,16 +291,17 @@ function buildHighlightedRead(
 	offset: number,
 	nw: number,
 	tw: number,
+	ind: string,
 ): string {
 	const padded = highlighted
 		.split("\n")
 		.map((line, index) => {
 			const lineNo = String(offset + index + 1);
-			return `${TOOL_RESULT_INDENT}${FG_LNUM}${" ".repeat(Math.max(0, nw - lineNo.length))}${lineNo}${RST} ${FG_RULE}│${RST} ${line}${RST}`;
+			return `${ind}${FG_LNUM}${" ".repeat(Math.max(0, nw - lineNo.length))}${lineNo}${RST} ${FG_RULE}│${RST} ${line}${RST}`;
 		})
 		.join("\n");
-	const divider = skillName ? `${TOOL_RESULT_INDENT}${FG_RULE}${"─".repeat(Math.max(1, tw - 1))}${RST}\n` : "";
-	return `\n${TOOL_RESULT_INDENT}${header}\n\n${divider}${padded}`;
+	const divider = skillName ? `${ind}${FG_RULE}${"─".repeat(Math.max(1, tw - ind.length))}${RST}\n` : "";
+	return `\n${ind}${header}\n\n${divider}${padded}`;
 }
 
 function getText(result: Result): string {

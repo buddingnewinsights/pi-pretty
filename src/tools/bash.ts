@@ -1,7 +1,7 @@
 /* pi-pretty: bash tool -- command execution with styled output. */
 
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { resolveBaseBackground, TOOL_RESULT_INDENT, termWidth } from "../config.js";
+import { resolveBaseBackground, termWidth } from "../config.js";
 import {
 	CHARS_KEY,
 	compactErrorLines,
@@ -17,6 +17,7 @@ import {
 	renderToolDuration,
 	renderToolError,
 	setCollapsedToolTitle,
+	toolIndent,
 } from "../render.js";
 import { resolveTextCtor } from "../tui-text.js";
 import type { BashDetails, ComponentLike, RenderCtxLike, SdkToolDef, TextContent, ThemeLike } from "../types.js";
@@ -106,6 +107,7 @@ export function registerBashTool(
 			resolveBaseBackground(theme);
 			const text = ctx.lastComponent ?? new TC("", 0, 0);
 			const t = typeof args.timeout === "number" ? ` ${theme.fg("muted", `(timeout ${args.timeout}s)`)}` : "";
+			const ind = toolIndent(ctx);
 			const tw = termWidth() || 80;
 			const rawCmd = String(args.command ?? "");
 			const headerBudget = ctx.expanded ? tw : Math.max(8, tw - 20);
@@ -117,11 +119,7 @@ export function registerBashTool(
 						: rawCmd;
 			const commandLabel = theme.fg(ctx.isError ? "error" : "toolTitle", theme.bold(`$ ${cmd}`));
 			const renderTitle = (suffix = ""): string =>
-				fillToolBackground(
-					`\n${TOOL_RESULT_INDENT}${commandLabel}${t}${suffix}\n`,
-					undefined,
-					ctx.expanded ? undefined : tw,
-				);
+				fillToolBackground(`\n${ind}${commandLabel}${t}${suffix}\n`, undefined, ctx.expanded ? undefined : tw, ind);
 			rememberToolTitle(ctx, text, renderTitle);
 			text.setText(renderTitle());
 			return text;
@@ -154,26 +152,29 @@ export function registerBashTool(
 				const cleaned = stripBashExitStatusLine(d.text);
 				const output = isErr ? compactErrorLines(cleaned).join("\n") : cleaned;
 				const lineCount = output.split("\n").length;
-				const info = [
-					`${lineCount} lines`,
-					renderToolDuration(displayResult),
-					rejectedMetrics ? formatCharCount(rejectedMetrics.chars) : "",
-					!ctx.expanded ? "ctrl+o to expand" : "",
-				]
-					.filter(Boolean)
-					.map((part) => theme.fg("dim", part))
-					.join(theme.fg("dim", " · "));
-				const header = `${TOOL_RESULT_INDENT}${info}`;
+				const buildInfo = (): string =>
+					[
+						`${lineCount} lines`,
+						renderToolDuration(displayResult, ctx),
+						rejectedMetrics ? formatCharCount(rejectedMetrics.chars) : "",
+						!ctx.expanded ? "ctrl+o to expand" : "",
+					]
+						.filter(Boolean)
+						.map((part) => theme.fg("dim", part))
+						.join(theme.fg("dim", " · "));
+				const info = buildInfo();
 				const rw = termWidth();
 
 				if (setCollapsedToolTitle(ctx, text, ` ${info}`)) return text;
 
 				const renderFn = (w: number) => {
-					if (!ctx.expanded) return fillToolBody(header, undefined, w);
-					if (!output.trim()) return fillToolBody(header, undefined, w);
+					const ind = toolIndent(ctx);
+					const header = `${ind}${buildInfo()}`;
+					if (!ctx.expanded) return fillToolBody(header, undefined, w, ind);
+					if (!output.trim()) return fillToolBody(header, undefined, w, ind);
 					const show = output.split("\n");
-					const out = [header, "", ...show.map((line: string) => `${TOOL_RESULT_INDENT}${line}`)];
-					return fillToolBody(out.join("\n"), undefined, w);
+					const out = [header, "", ...show.map((line: string) => `${ind}${line}`)];
+					return fillToolBody(out.join("\n"), undefined, w, ind);
 				};
 
 				text.setText(renderFn(rw));
@@ -184,7 +185,7 @@ export function registerBashTool(
 					let key: string | undefined;
 					(text as unknown as Record<string, unknown>).render = (w: number) => {
 						const width = Math.max(1, Math.floor(w || termWidth()));
-						const k = `bash:${ctx.expanded ? "1" : "0"}:${width}:${d.exitCode ?? "killed"}:${output.length}:${renderToolDuration(displayResult)}`;
+						const k = `bash:${ctx.expanded ? "1" : "0"}:${width}:${d.exitCode ?? "killed"}:${output.length}:${renderToolDuration(displayResult, ctx)}:${toolIndent(ctx).length}`;
 						if (key !== k) {
 							text.setText(renderFn(width));
 							key = k;
@@ -196,13 +197,17 @@ export function registerBashTool(
 			}
 
 			if (ctx.isError) {
-				text.setText(renderToolError(tc || "Error", theme));
+				text.setText(renderToolError(tc || "Error", theme, toolIndent(ctx)));
 				return text;
 			}
 			const fc = displayResult.content?.[0];
+			const ind = toolIndent(ctx);
 			text.setText(
 				fillToolBody(
-					`${TOOL_RESULT_INDENT}${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`,
+					`${ind}${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`,
+					undefined,
+					undefined,
+					ind,
 				),
 			);
 			return text;

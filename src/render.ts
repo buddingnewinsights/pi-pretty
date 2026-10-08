@@ -200,7 +200,16 @@ export function preserveBoxBackground(ansi: string): string {
 	});
 }
 
-export function fillToolBackground(text: string, bg = BG_BASE, width?: number): string {
+/** Left indent for self-rendered rows: host `ctx.outputPad` spaces, falling back to 1 on older/invalid hosts. */
+export function toolIndent(ctx?: Pick<RenderContext, "outputPad">): string {
+	const pad = ctx?.outputPad;
+	// Reject unusable values, including pads wider than the terminal (avoids giant allocations).
+	return typeof pad === "number" && Number.isInteger(pad) && pad >= 0 && pad <= termWidth()
+		? " ".repeat(pad)
+		: TOOL_RESULT_INDENT;
+}
+
+export function fillToolBackground(text: string, bg = BG_BASE, width?: number, indent = TOOL_RESULT_INDENT): string {
 	return text
 		.split("\n")
 		.map((line) => {
@@ -209,7 +218,8 @@ export function fillToolBackground(text: string, bg = BG_BASE, width?: number): 
 				return bg ? bg + stripped : stripped;
 			}
 			const plainLead = line.replace(ANSI_CAPTURE_RE, "");
-			const skipPad = line.startsWith(TOOL_RESULT_INDENT) || plainLead.startsWith(TOOL_RESULT_INDENT);
+			// Indented rows keep their natural width; with no indent every row is padded.
+			const skipPad = indent !== "" && (line.startsWith(indent) || plainLead.startsWith(indent));
 			const fitted = truncateToWidth(line, width, "", !skipPad);
 			const stripped = preserveBoxBackground(fitted);
 			return bg ? bg + stripped : stripped;
@@ -218,8 +228,8 @@ export function fillToolBackground(text: string, bg = BG_BASE, width?: number): 
 }
 
 /** Add exactly the missing terminal row after a rendered tool body. */
-export function fillToolBody(text: string, bg = BG_BASE, width?: number): string {
-	return fillToolBackground(text.endsWith("\n") ? text : `${text}\n`, bg, width);
+export function fillToolBody(text: string, bg = BG_BASE, width?: number, indent = TOOL_RESULT_INDENT): string {
+	return fillToolBackground(text.endsWith("\n") ? text : `${text}\n`, bg, width, indent);
 }
 
 const TOOL_TITLE_STATE_KEY = "__piPrettyToolTitle";
@@ -250,29 +260,44 @@ function lnum(n: number, w: number): string {
 // Tool metrics line
 // ---------------------------------------------------------------------------
 
-export function renderToolMetrics(result: AgentToolResult<Record<string, unknown>>): string {
+/** Prefer the host's final duration (0 is valid); fall back to wrapper-recorded metadata. */
+function resolveDurationMs(
+	result: AgentToolResult<Record<string, unknown>>,
+	ctx?: Pick<RenderContext, "durationMs">,
+): number | undefined {
+	const host = ctx?.durationMs;
+	if (typeof host === "number" && Number.isFinite(host) && host >= 0) return host;
 	const details = result.details as Record<string, unknown> | undefined;
-	if (!details) return "";
-	const elapsed = formatElapsedMs(details[ELAPSED_KEY] as number | undefined);
-	const chars = formatCharCount(details[CHARS_KEY] as number | undefined);
+	return details?.[ELAPSED_KEY] as number | undefined;
+}
+
+export function renderToolMetrics(
+	result: AgentToolResult<Record<string, unknown>>,
+	ctx?: Pick<RenderContext, "durationMs">,
+): string {
+	const details = result.details as Record<string, unknown> | undefined;
+	const elapsed = formatElapsedMs(resolveDurationMs(result, ctx));
+	const chars = formatCharCount(details?.[CHARS_KEY] as number | undefined);
 	if (!elapsed && !chars) return "";
 	return `${FG_DIM}· ${[elapsed, chars].filter(Boolean).join(" · ")}${RST}`;
 }
 
-export function renderToolDuration(result: AgentToolResult<Record<string, unknown>>): string {
-	const details = result.details as Record<string, unknown> | undefined;
-	return formatElapsedMs(details?.[ELAPSED_KEY] as number | undefined);
+export function renderToolDuration(
+	result: AgentToolResult<Record<string, unknown>>,
+	ctx?: Pick<RenderContext, "durationMs">,
+): string {
+	return formatElapsedMs(resolveDurationMs(result, ctx));
 }
 
 // ---------------------------------------------------------------------------
 // Error renderer
 // ---------------------------------------------------------------------------
 
-export function renderToolError(error: string, theme: ThemeLike): string {
+export function renderToolError(error: string, theme: ThemeLike, indent = TOOL_RESULT_INDENT): string {
 	const body = compactErrorLines(error)
-		.map((line) => `${TOOL_RESULT_INDENT}${line ? theme.fg("error", line) : ""}`)
+		.map((line) => `${indent}${line ? theme.fg("error", line) : ""}`)
 		.join("\n");
-	return fillToolBody(body, BG_ERROR);
+	return fillToolBody(body, BG_ERROR, undefined, indent);
 }
 
 // ---------------------------------------------------------------------------
@@ -305,14 +330,14 @@ export async function renderFileContent(
 // Bash — colored exit status
 // ---------------------------------------------------------------------------
 
-export function renderBashOutput(text: string): string {
+export function renderBashOutput(text: string, indent = TOOL_RESULT_INDENT): string {
 	const lines = text.split("\n");
 	const maxShow = MAX_PREVIEW_LINES;
 	const show = lines.slice(0, maxShow);
 	const remaining = lines.length - maxShow;
 
 	let body = show.join("\n");
-	if (remaining > 0) body += `\n${TOOL_RESULT_INDENT}${FG_DIM}… ${remaining} more lines${RST}`;
+	if (remaining > 0) body += `\n${indent}${FG_DIM}… ${remaining} more lines${RST}`;
 
 	return body;
 }
@@ -351,6 +376,7 @@ export function renderTree(text: string, _basePath: string): string {
 // Find — grouped file list (plain, no tree characters or icons)
 // ---------------------------------------------------------------------------
 
+/** File rows keep the structural one-space indent; the tool applies host outer padding. */
 export function renderFindResults(text: string, theme?: ThemeLike): string {
 	const lines = text.trim().split("\n").filter(Boolean);
 	if (!lines.length) return theme ? theme.fg("dim", "(no matches)") : `${FG_DIM}(no matches)${RST}`;
@@ -392,7 +418,7 @@ export function renderFindResults(text: string, theme?: ThemeLike): string {
 // Grep — highlighted matches with line numbers
 // ---------------------------------------------------------------------------
 
-export async function renderGrepResults(text: string, pattern: string): Promise<string> {
+export async function renderGrepResults(text: string, pattern: string, indent = TOOL_RESULT_INDENT): Promise<string> {
 	const lines = normalizeLineEndings(text).split("\n");
 	if (!lines.length || (lines.length === 1 && !lines[0].trim())) return `${FG_DIM}(no matches)${RST}`;
 
@@ -423,10 +449,10 @@ export async function renderGrepResults(text: string, pattern: string): Promise<
 			const nw = Math.max(3, lineNo.length);
 			let display = content;
 			if (re) display = content.replace(re, `${RST}${FG_YELLOW}\x1b[1m$1${RST}`);
-			out.push(`${TOOL_RESULT_INDENT}${lnum(Number(lineNo), nw)} ${FG_RULE}│${RST} ${display}${RST}`);
+			out.push(`${indent}${lnum(Number(lineNo), nw)} ${FG_RULE}│${RST} ${display}${RST}`);
 			count++;
 		} else if (line.trim() === "--") {
-			out.push(`${TOOL_RESULT_INDENT}${FG_DIM}  ···${RST}`);
+			out.push(`${indent}${FG_DIM}  ···${RST}`);
 		} else if (line.trim()) {
 			out.push(line);
 			count++;
@@ -445,7 +471,7 @@ export function makeRenderCall(toolName: string) {
 		resolveBaseBackground(theme);
 		const text = ctx.lastComponent ?? new TuiText("", 0, 0);
 		const bg = ctx.isError ? BG_ERROR : undefined;
-		text.setText(fillToolBackground(`${theme.fg("toolTitle", theme.bold(toolName))}`, bg));
+		text.setText(fillToolBackground(`${theme.fg("toolTitle", theme.bold(toolName))}`, bg, undefined, toolIndent(ctx)));
 		return text;
 	};
 }
@@ -455,26 +481,30 @@ export function makeRenderResult() {
 		resolveBaseBackground(theme);
 		const text = ctx.lastComponent ?? new TuiText("", 0, 0);
 		if (ctx.isError) {
-			text.setText(renderToolError(getTextContent(result) || "Error", theme));
+			text.setText(renderToolError(getTextContent(result) || "Error", theme, toolIndent(ctx)));
 			return text;
 		}
 		const content = getTextContent(result);
 		if (content) {
 			const renderWidth = termWidth();
+			const indent = toolIndent(ctx);
 			const lines = content.split("\n");
 			const maxShow = ctx.expanded ? lines.length : Math.min(lines.length, MAX_PREVIEW_LINES);
 			const preview = lines.slice(0, maxShow).join("\n");
 			const more = lines.length > maxShow ? `\n${FG_DIM}... ${lines.length - maxShow} more lines${RST}` : "";
-			const metrics = renderToolMetrics(result);
+			const metrics = renderToolMetrics(result, ctx);
 			text.setText(
 				fillToolBody(
-					`${TOOL_RESULT_INDENT}${preview}${more}${metrics ? `\n${TOOL_RESULT_INDENT}${metrics}` : ""}`,
+					`${indent}${preview}${more}${metrics ? `\n${indent}${metrics}` : ""}`,
 					undefined,
 					renderWidth,
+					indent,
 				),
 			);
 		} else {
-			text.setText(fillToolBody(`${TOOL_RESULT_INDENT}${theme.fg("dim", "(no text output)")}`));
+			text.setText(
+				fillToolBody(`${toolIndent(ctx)}${theme.fg("dim", "(no text output)")}`, undefined, undefined, toolIndent(ctx)),
+			);
 		}
 		return text;
 	};

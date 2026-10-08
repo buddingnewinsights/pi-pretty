@@ -39,6 +39,30 @@ describe("host prompt metadata passthrough", () => {
 		expect(definition?.constrainedSampling).toEqual({ type: "json_schema", strict: "prefer" });
 	});
 
+	it("read forwards the host output schema", () => {
+		let definition: ToolDefinition | undefined;
+		const pi = {
+			registerTool: (d: ToolDefinition) => {
+				definition = d;
+			},
+		} as unknown as ExtensionAPI;
+		const outputSchema = { type: "object", properties: { content: { type: "string" } } };
+
+		registerReadTool(
+			pi,
+			process.cwd(),
+			undefined,
+			{
+				parameters: { type: "object", properties: {} },
+				outputSchema,
+				execute: async () => ({ content: [], details: {} }),
+			},
+			MockText,
+		);
+
+		expect(definition?.outputSchema).toBe(outputSchema);
+	});
+
 	it("ls forwards the host snippet", () => {
 		let definition: ToolDefinition | undefined;
 		const pi = {

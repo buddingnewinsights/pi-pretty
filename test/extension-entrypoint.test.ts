@@ -15,11 +15,13 @@ describe("manifest extension entrypoint", () => {
 			const output = execFileSync(process.execPath, ["--input-type=module", "-e", `
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 const root = process.cwd();
 const dir = process.env.PROBE_DIR;
 const sdk = import.meta.resolve('@earendil-works/pi-coding-agent');
-const jitiPath = join(dirname(fileURLToPath(sdk)), '../node_modules/jiti/lib/jiti-static.mjs');
+// Resolve jiti the way the host package does, wherever the package manager placed it.
+const jitiPath = join(dirname(createRequire(fileURLToPath(sdk)).resolve('jiti')), 'jiti-static.mjs');
 const { createJiti } = await import(pathToFileURL(jitiPath));
 const hostPath = join(dir, 'host.mjs');
 writeFileSync(hostPath, \`export * from \${JSON.stringify(sdk)};

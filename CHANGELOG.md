@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.6.31] - 2026-10-08
+
+### Added
+
+- Honor Pi's `outputPad` setting in self-rendered `read`, `bash`, `ls`, `find`, and `grep` output, with one-space fallback on older hosts. Keep directory/file nesting independent of outer padding.
+- Prefer Pi's recorded `durationMs` for execution-time displays, including zero-duration and failed bash results, with fallback to existing elapsed metadata on older hosts.
+
+### Fixed
+
+- Preserve the SDK read tool's `outputSchema`, retaining structured results when called through codemode.
+- Keep read highlighting and bash render caches consistent when padding or execution timing changes.
+- Resolve the host's jiti dependency without assuming a nested `node_modules` layout in the extension entrypoint test.
+
+### Maintenance
+
+- Align the four Pi development SDK dependencies and both lockfiles with Pi 1.1.0. Runtime peer ranges remain unchanged.
+- Add regression coverage for padding, nesting, timing fallbacks, and stale asynchronous highlighting.
+
 ## [0.6.30] - 2026-09-30
 
 ### Fixed

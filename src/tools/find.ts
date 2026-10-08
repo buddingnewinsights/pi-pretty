@@ -2,7 +2,7 @@
 
 import { isAbsolute, relative } from "node:path";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { BG_ERROR, FG_DIM, RST, resolveBaseBackground, TOOL_RESULT_INDENT } from "../config.js";
+import { BG_ERROR, FG_DIM, RST, resolveBaseBackground } from "../config.js";
 import { isLikelyGlobPattern, normalizeFindGlobPattern } from "../find-glob.js";
 import { shortPath } from "../helpers.js";
 import { NOTICE_PARTIAL_FILE_INDEX } from "../notices.js";
@@ -14,6 +14,7 @@ import {
 	renderToolDuration,
 	renderToolError,
 	setCollapsedToolTitle,
+	toolIndent,
 } from "../render.js";
 import { resolveTextCtor } from "../tui-text.js";
 import type { FffServiceWithCursor, FindDetails, RenderCtxLike, SdkToolDef, TextContent, ThemeLike } from "../types.js";
@@ -171,8 +172,9 @@ export function registerFindTool(
 			const pathPart = theme.fg("toolOutput", pathArg);
 			const limitPart = limit !== undefined && limit !== null ? theme.fg("dim", ` limit ${limit}`) : "";
 			const out = `${findLabel} ${patternPart}${inPart}${pathPart}${limitPart}`;
+			const ind = toolIndent(ctx);
 			const renderTitle = (suffix = ""): string =>
-				fillToolBackground(`\n${TOOL_RESULT_INDENT}${out}${suffix}\n`, ctx.isError ? BG_ERROR : undefined);
+				fillToolBackground(`\n${ind}${out}${suffix}\n`, ctx.isError ? BG_ERROR : undefined, undefined, ind);
 			rememberToolTitle(ctx, text, renderTitle);
 			text.setText(renderTitle());
 			return text;
@@ -182,8 +184,9 @@ export function registerFindTool(
 			resolveBaseBackground(theme);
 			const r = result;
 			const text = (ctx as RenderCtxLike).lastComponent ?? new TC("", 0, 0);
+			const ind = toolIndent(ctx);
 			if (ctx.isError) {
-				text.setText(renderToolError(getText(r) || "Error", theme));
+				text.setText(renderToolError(getText(r) || "Error", theme, ind));
 				return text;
 			}
 			const d = r.details as FindDetails | undefined;
@@ -191,36 +194,37 @@ export function registerFindTool(
 				if (!d.text.trim()) {
 					const notice = d.notices?.length ? ` ${theme.fg("warning", `[${d.notices.join(". ")}]`)}` : "";
 					if (setCollapsedToolTitle(ctx, text, ` ${FG_DIM}0 files${RST}${notice}`)) return text;
-					const noticeStr = d.notices?.length
-						? `\n${TOOL_RESULT_INDENT}${theme.fg("warning", `[${d.notices.join(". ")}]`)}`
-						: "";
-					text.setText(fillToolBody(`${TOOL_RESULT_INDENT}${theme.fg("dim", "0 files")}${noticeStr}`));
+					const noticeStr = d.notices?.length ? `\n${ind}${theme.fg("warning", `[${d.notices.join(". ")}]`)}` : "";
+					text.setText(fillToolBody(`${ind}${theme.fg("dim", "0 files")}${noticeStr}`, undefined, undefined, ind));
 					return text;
 				}
 				if (!ctx.expanded) {
-					const duration = renderToolDuration(r);
+					const duration = renderToolDuration(r, ctx);
 					const summary = `${FG_DIM}${d.matchCount} files — ctrl+o to expand${RST}${duration ? `${FG_DIM}· ${duration}${RST}` : ""}`;
 					if (setCollapsedToolTitle(ctx, text, ` ${summary}`)) return text;
-					text.setText(fillToolBody(`${TOOL_RESULT_INDENT}${summary}`));
+					text.setText(fillToolBody(`${ind}${summary}`, undefined, undefined, ind));
 					return text;
 				}
 				const rendered = renderFindResults(d.text, theme)
 					.split("\n")
-					.map((l) => `${TOOL_RESULT_INDENT}${l}`)
+					.map((l) => `${ind}${l}`)
 					.join("\n");
-				const noticeStr = d.notices?.length
-					? `\n${TOOL_RESULT_INDENT}${theme.fg("warning", `[${d.notices.join(". ")}]`)}`
-					: "";
-				const duration = renderToolDuration(r);
+				const noticeStr = d.notices?.length ? `\n${ind}${theme.fg("warning", `[${d.notices.join(". ")}]`)}` : "";
+				const duration = renderToolDuration(r, ctx);
 				text.setText(
 					fillToolBody(
-						`${TOOL_RESULT_INDENT}${theme.fg("dim", `${d.matchCount} files`)}${duration ? `${FG_DIM}· ${duration}${RST}` : ""}\n${rendered}${noticeStr}`,
+						`${ind}${theme.fg("dim", `${d.matchCount} files`)}${duration ? `${FG_DIM}· ${duration}${RST}` : ""}\n${rendered}${noticeStr}`,
+						undefined,
+						undefined,
+						ind,
 					),
 				);
 				return text;
 			}
 			const fc = r.content?.[0] as TextContent | undefined;
-			text.setText(fillToolBody(`${TOOL_RESULT_INDENT}${theme.fg("dim", fc?.text?.slice(0, 120) ?? "0 files")}`));
+			text.setText(
+				fillToolBody(`${ind}${theme.fg("dim", fc?.text?.slice(0, 120) ?? "0 files")}`, undefined, undefined, ind),
+			);
 			return text;
 		},
 	} as unknown as ToolDefinition);
