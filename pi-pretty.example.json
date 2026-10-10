@@ -5,6 +5,7 @@
 	},
 	"theme": "github-dark",
 	"icons": "nerd",
+	"toolStyle": "default",
 	"enableTools": [
 		"ls"
 	],

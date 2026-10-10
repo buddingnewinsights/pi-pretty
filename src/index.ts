@@ -22,6 +22,12 @@ import type {
 import * as hostSdk from "@earendil-works/pi-coding-agent";
 import { createFffAutocompleteProvider } from "./autocomplete.js";
 import {
+	installClaudeChatGrouping,
+	installClaudeExternalToolRenderers,
+	setClaudeStyleTheme,
+	withClaudeToolStyleApi,
+} from "./claude-style.js";
+import {
 	applyConfig,
 	getDefaultAgentDir,
 	loadConfig,
@@ -45,6 +51,7 @@ import {
 	type PerRowThinkingLabels,
 	resolveThinkingIndicatorSettings,
 	resolveWorkingIndicatorSettings,
+	setClaudeThinkingLabels,
 	type ThinkingTimer,
 	thinkingBlockActive,
 	WORKING_INTERVAL_MS,
@@ -76,10 +83,15 @@ export type { PiPrettyDeps };
 export default async function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrettyDeps): Promise<void> {
 	const config = loadConfig();
 	applyConfig(config);
-	pi.registerMarkdownTransformer?.((markdown, context) => {
-		if (context.messageType !== "user" || markdown.trim() === "") return markdown;
-		return ` ${USER_MESSAGE_ICON} ${markdown}`;
-	});
+	const claudeStyle = config.toolStyle === "claudecode";
+	setClaudeThinkingLabels(claudeStyle);
+	// claudecode style keeps user messages plain; the default style prefixes them with a prompt icon.
+	if (!claudeStyle) {
+		pi.registerMarkdownTransformer?.((markdown, context) => {
+			if (context.messageType !== "user" || markdown.trim() === "") return markdown;
+			return ` ${USER_MESSAGE_ICON} ${markdown}`;
+		});
+	}
 	pi.registerFlag?.("pretty-fff-home-scan", {
 		description: "Allow FFF to index the home directory when Pi starts there",
 		type: "boolean",
@@ -214,12 +226,16 @@ export default async function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrett
 		const editorUi = ctx.ui as unknown as EditorUiCompatibility;
 		if (typeof editorUi.setEditorComponent !== "function") return;
 		previousEditorFactory = editorUi.getEditorComponent?.();
-		const PromptEditor = createPromptEditorClass(hostCustomEditor, (icon) => {
-			const theme = ctx.ui.theme;
-			return typeof theme.getThinkingBorderColor === "function"
-				? theme.getThinkingBorderColor(ctx.thinkingLevel ?? "off")(icon)
-				: theme.fg("thinkingText", icon);
-		});
+		const PromptEditor = createPromptEditorClass(
+			hostCustomEditor,
+			(icon) => {
+				const theme = ctx.ui.theme;
+				return typeof theme.getThinkingBorderColor === "function"
+					? theme.getThinkingBorderColor(ctx.thinkingLevel ?? "off")(icon)
+					: theme.fg("thinkingText", icon);
+			},
+			!claudeStyle,
+		);
 		editorUi.setEditorComponent((tui, theme, keybindings) => new PromptEditor(tui, theme, keybindings));
 		promptEditorInstalled = true;
 	};
@@ -294,6 +310,9 @@ export default async function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrett
 
 	pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
 		if (ctx.mode === "tui") {
+			setClaudeStyleTheme(ctx.ui.theme);
+			installClaudeChatGrouping(claudeStyle);
+			installClaudeExternalToolRenderers(hostSdk.ToolExecutionComponent, claudeStyle);
 			installPromptEditor(ctx);
 			ctx.ui.setToolsExpanded(false);
 			// Per-row hidden-thinking labels: intercept the host's label fan-out so
@@ -536,19 +555,20 @@ export default async function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrett
 	// Tool registration
 	// ------------------------------------------------------------------
 
+	const toolPi = claudeStyle ? withClaudeToolStyleApi(pi) : pi;
 	if (isToolEnabled("read") && createReadTool) {
-		registerReadTool(pi, cwd, null, createReadTool(cwd), TextComp);
+		registerReadTool(toolPi, cwd, null, createReadTool(cwd), TextComp);
 	}
 	if (isToolEnabled("bash") && createBashTool) {
-		registerBashTool(pi, cwd, null, createBashTool(cwd), TextComp);
+		registerBashTool(toolPi, cwd, null, createBashTool(cwd), TextComp);
 	}
 	if (isToolEnabled("ls") && createLsTool) {
-		registerLsTool(pi, cwd, null, createLsTool(cwd), TextComp);
+		registerLsTool(toolPi, cwd, null, createLsTool(cwd), TextComp);
 	}
 	if (isToolEnabled("find") && createFindTool) {
-		registerFindTool(pi, cwd, fffService, createFindTool(cwd), TextComp);
+		registerFindTool(toolPi, cwd, fffService, createFindTool(cwd), TextComp);
 	}
 	if (isToolEnabled("grep") && createGrepTool) {
-		registerGrepTool(pi, cwd, fffService, createGrepTool(cwd), TextComp);
+		registerGrepTool(toolPi, cwd, fffService, createGrepTool(cwd), TextComp);
 	}
 }

@@ -113,6 +113,8 @@ export interface PrettyConfig {
 	cacheLimit?: number;
 	workingIndicator?: WorkingIndicatorConfig;
 	thinkingIndicator?: ThinkingIndicatorConfig;
+	/** "claudecode" renders collapsed tools as `✓ Name (args)` rows with grouping. */
+	toolStyle?: "default" | "claudecode";
 	fff?: FffConfig;
 }
 
@@ -151,6 +153,7 @@ export function loadConfig(agentDir = getConfigDir()): PrettyConfig {
 			if (background.tool || background.error) config.background = background;
 		}
 		if (typeof parsed.theme === "string" && parsed.theme.trim() !== "") config.theme = parsed.theme;
+		if (parsed.toolStyle === "default" || parsed.toolStyle === "claudecode") config.toolStyle = parsed.toolStyle;
 		if (typeof parsed.icons === "string") config.icons = parsed.icons;
 		const enableTools = normalizeToolList(parsed.enableTools);
 		const disableTools = normalizeToolList(parsed.disableTools);

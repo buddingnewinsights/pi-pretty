@@ -175,6 +175,7 @@ Place a JSON file alongside Pi's `settings.json` to customize pi-pretty. Every o
 | `cacheLimit` | positive int | `PRETTY_CACHE_LIMIT` | `128` |
 | `fff.enableHomeScanning` | boolean | `PRETTY_FFF_HOME_SCAN` (`1`/`0`) | `false` |
 | `fff.enableRootScanning` | boolean | `PRETTY_FFF_ROOT_SCAN` (`1`/`0`) | `false` |
+| `toolStyle` | `default` \| `claudecode` | — | `default` |
 | `workingIndicator.enabled` | boolean | `PRETTY_WORKING_INDICATOR` (`on`/`off`) | `true` |
 | `workingIndicator.text` | string or string[] (phrases rotated per sweep; env accepts comma-separated) | `PRETTY_WORKING_INDICATOR_TEXT` | `["Working…"]` |
 | `workingIndicator.mode` | `shimmer` \| `kitt` \| `static` | `PRETTY_WORKING_INDICATOR_MODE` | `shimmer` |
@@ -234,6 +235,26 @@ back to pi's global-label behavior — including restoring the default `Thinking
 older rows are never mislabeled. The 30fps ticker runs only while the current message's last block
 is thinking, bounding the cost of `setHiddenThinkingLabel(label)` rebuilding chat children. Inherits
 `mode`, `bold`, and the palette/accent from `workingIndicator`.
+
+### Claude Code tool style
+
+Set `"toolStyle": "claudecode"` for a Claude Code-like transcript (restart pi to apply):
+
+```
+✓ Done (3 tool calls · 1 thought) (ctrl+o to expand)
+  ├─ • Read (src/a.ts)
+  │  └ 42 lines · ◷ 0.02s
+  ├─ • Edit (src/a.ts)
+  │  └ +3 -1 · ◷ 0.06s
+  └─ • Bash (npm test)
+     └ 12 lines · ◷ 3.1s · timeout 300s
+```
+
+- Collapsed tool calls are one `✓ Name (args)` row plus an `└` result row; a spinner shows while running, `·` while waiting, `✗` on failure. Ctrl+O (or a click) expands to the full pretty output.
+- Two or more consecutive tool calls fold into one `Done (…)` / `Running (…)` group. Click a tool in the group to expand it.
+- Covers `read`, `bash`, `grep`, `find`, `ls`, and — through the host's renderer lookup, without re-registering them — `write`, `edit`, `apply_patch` (pi-diff), `codemode`, and `recall`. `+N` is shown in the success color and `-N` in the error color. Tools it does not style keep their own rendering and break a group.
+- Hidden thinking reads `thought 3s (ctrl+t to expand)`, user messages lose the `❯` prefix, and the input box drops its rounded border for plain rules with a flush-left `❯`.
+- `toolStyle` only changes presentation. It patches Pi's `ToolExecutionComponent` and chat `Container` render lookups, which are not public API; if Pi reshapes them the styling degrades to Pi's own rendering.
 
 ### Environment variables
 

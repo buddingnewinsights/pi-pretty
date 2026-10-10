@@ -166,4 +166,11 @@ describe("prompt editor", () => {
 		await handlers.get("session_shutdown")?.({}, ctx);
 		expect(editorFactory).toBeUndefined();
 	});
+
+	it("keeps plain horizontal rules and a flush-left prompt when unboxed", () => {
+		const PromptEditor = createPromptEditorClass(fakeEditorClass, (text) => text, false);
+		const editor = new PromptEditor(...([] as unknown as ConstructorParameters<CustomEditorConstructor>));
+
+		expect(editor.render(10)).toEqual(["─".repeat(10), "❯ draft", "─".repeat(10)]);
+	});
 });

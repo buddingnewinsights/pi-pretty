@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.7.0] - 2026-10-10
+
+### Added
+
+- Opt-in `toolStyle: "claudecode"` (default `default`, no change for existing users): collapsed tools render as `✓ Name (args)` with an `└` result row (line counts, duration, bash `timeout`, `+N -N` for edits), a braille spinner while running, `·` while pending, and `✗` on failure.
+- Fold consecutive tool calls into `Done (…)` / `Running (…)` groups with a `├─`/`└─` tree. Clicking a tool in a group expands it; Ctrl+O expands everything. Tools the style does not cover break a group instead of being flattened into it.
+- Style `write`, `edit`, `apply_patch` (pi-diff), `codemode` (Pi built-in), and `recall` (pikit) without re-registering them, by deciding their renderers per component by tool name. Their full output remains available when expanded.
+- `(ctrl+o to expand)` / `(ctrl+o to collapse)` hints on folded groups and expanded calls, and `thought 3s (ctrl+t to expand)` for hidden thinking, using the user's own key bindings.
+- In this style: flush-left `thinking` / `thought 3s` labels, no `❯` prefix on user messages, and an input box with plain horizontal rules and a flush-left `❯` instead of the rounded border.
+
+### Maintenance
+
+- Add `vitest.config.ts` so tests never read the developer's real `~/.pi/agent/pi-pretty.json`.
+- Add regression coverage for rows, grouping, click-to-expand, delegated renderers, and the unboxed prompt editor.
+
 ## [0.6.31] - 2026-10-08
 
 ### Added

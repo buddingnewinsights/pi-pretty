@@ -14,6 +14,7 @@
  * phase. The extension adds no interrupt hint or token-count suffix.
  */
 
+import { keyText } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { FG_BLUE, FG_DIM, FG_MUTED, type ThinkingIndicatorConfig, type WorkingIndicatorConfig } from "./config.js";
 import { dimAccentHex, hexToAnsiFg, sessionAccentHex } from "./session-color.js";
@@ -539,7 +540,7 @@ export function installPerRowThinkingLabels(componentClass: unknown): PerRowThin
 			if (typeof ts !== "number") return incoming;
 			if (ts === state.activeTs) return incoming;
 			const ms = state.completed.get(ts);
-			return ms === undefined ? THINKING_LABEL : `${THOUGHT_LABEL} ${formatThinkingDuration(ms)}`;
+			return ms === undefined ? thinkingLabel() : thoughtLabel(ms);
 		} catch {
 			return incoming;
 		}
@@ -588,9 +589,20 @@ export interface ThinkingTimer {
 	restore(): void;
 }
 
-const THINKING_LABEL = " Thinking...";
-const THOUGHT_LABEL = " Thought for";
-const padThinkingLabel = (label: string): string => (label.startsWith(" ") ? label : ` ${label}`);
+let claudeThinkingLabels = false;
+/** claudecode tool style: flush-left `thinking` / `thought 3s` instead of ` Thinking...` / ` Thought for 3s`. */
+export function setClaudeThinkingLabels(enabled: boolean): void {
+	claudeThinkingLabels = enabled;
+}
+const thinkingLabel = (): string => (claudeThinkingLabels ? "thinking" : " Thinking...");
+const padThinkingLabel = (label: string): string =>
+	claudeThinkingLabels || label.startsWith(" ") ? label : ` ${label}`;
+/** Settled label for a finished thinking run; claudecode style appends the toggle hint when bound. */
+const thoughtLabel = (ms: number): string => {
+	if (!claudeThinkingLabels) return ` Thought for ${formatThinkingDuration(ms)}`;
+	const key = keyText("app.thinking.toggle");
+	return `thought ${formatThinkingDuration(ms)}${key ? ` (${key} to expand)` : ""}`;
+};
 
 /** Format sub-second elapsed time as milliseconds, then use compact whole seconds. */
 export function formatThinkingDuration(elapsedMs: number): string {
@@ -626,13 +638,13 @@ export function createThinkingTimer(
 	return {
 		tick(): void {
 			if (terminal) return;
-			animator.tick(`${THINKING_LABEL} ${duration()}`);
+			animator.tick(`${thinkingLabel()} ${duration()}`);
 		},
 		complete(): number | undefined {
 			if (terminal) return undefined;
 			terminal = true;
 			const ms = elapsed();
-			animator.show(`${THOUGHT_LABEL} ${formatThinkingDuration(ms)}`);
+			animator.show(thoughtLabel(ms));
 			return ms;
 		},
 		restore(): void {
@@ -702,7 +714,7 @@ export function createThinkingLabelAnimator(
 		}).frames.map((frame) => `${leftPadding}${frame}`);
 	};
 
-	let currentLabel = THINKING_LABEL;
+	let currentLabel = thinkingLabel();
 	let frames = buildLabelFrames(currentLabel);
 
 	let index = 0;
@@ -711,7 +723,7 @@ export function createThinkingLabelAnimator(
 		get frames(): readonly string[] {
 			return frames;
 		},
-		tick(label = THINKING_LABEL): void {
+		tick(label = thinkingLabel()): void {
 			const paddedLabel = padThinkingLabel(label);
 			if (paddedLabel !== currentLabel) {
 				frames = buildLabelFrames(paddedLabel);

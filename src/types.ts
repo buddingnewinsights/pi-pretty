@@ -34,6 +34,11 @@ export interface RenderCtxLike {
 	isError?: boolean;
 	state: Record<string, unknown>;
 	expanded?: boolean;
+	/** Tool call arguments as streamed so far. */
+	args?: Record<string, unknown>;
+	isPartial?: boolean;
+	/** False while the tool call is still streaming its arguments. */
+	executionStarted?: boolean;
 	invalidate?: () => void;
 	/** Host horizontal padding (pi >= 1.1). Absent on older hosts; renderers fall back to 1. */
 	outputPad?: number;
