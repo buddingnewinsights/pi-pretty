@@ -46,7 +46,7 @@
 		"@earendil-works/pi-coding-agent": "1.2.0",
 		"@earendil-works/pi-tui": "1.2.0",
 		"@types/node": "^20.0.0",
-		"typescript": "^5.0.0",
+		"typescript": "^7.0.2",
 		"vitest": "^4.0.18"
 	},
 	"peerDependencies": {
