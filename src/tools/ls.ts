@@ -6,6 +6,7 @@ import { shortPath } from "../helpers.js";
 import {
 	fillToolBackground,
 	fillToolBody,
+	isLsNotice,
 	rememberToolTitle,
 	renderToolError,
 	renderToolMetrics,
@@ -44,7 +45,12 @@ export function registerLsTool(
 				_type: "lsResult",
 				text: tc,
 				path: String((params as any).path ?? ""),
-				entryCount: tc ? tc.trim().split("\n").filter(Boolean).length : 0,
+				entryCount: tc
+					? tc
+							.trim()
+							.split("\n")
+							.filter((line) => line && !isLsNotice(line.trim())).length
+					: 0,
 			} as LsDetails;
 			return result;
 		}),

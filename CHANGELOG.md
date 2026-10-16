@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- `ls` header entry count no longer includes the SDK's `[N entries limit reached…]` notice line.
+
 ## [0.7.1] - 2026-10-16
 
 ### Fixed

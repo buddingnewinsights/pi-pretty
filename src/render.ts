@@ -347,6 +347,14 @@ export function renderBashOutput(text: string, indent = TOOL_RESULT_INDENT): str
 // Ls — tree view with icons
 // ---------------------------------------------------------------------------
 
+/** The SDK's `[N entries limit reached…]` / `[50.0KB limit reached]` lines; bracketed filenames are not notices. */
+const LS_NOTICE =
+	/^\[(?:\d+ entries limit reached\. Use limit=\d+ for more|\d+(?:\.\d+)?(?:B|KB|MB|GB) limit reached)(?:\. (?:\d+ entries limit reached\. Use limit=\d+ for more|\d+(?:\.\d+)?(?:B|KB|MB|GB) limit reached))*\]$/;
+
+export function isLsNotice(line: string): boolean {
+	return LS_NOTICE.test(line);
+}
+
 export function renderTree(text: string, _basePath: string): string {
 	const lines = text
 		.trim()
@@ -355,11 +363,8 @@ export function renderTree(text: string, _basePath: string): string {
 		.map((line) => line.trim());
 	if (!lines.length) return `${FG_DIM}(empty directory)${RST}`;
 
-	// Match the SDK's notice formats precisely; bracketed filenames remain entries.
-	const noticePattern =
-		/^\[(?:\d+ entries limit reached\. Use limit=\d+ for more|\d+(?:\.\d+)?(?:B|KB|MB|GB) limit reached)(?:\. (?:\d+ entries limit reached\. Use limit=\d+ for more|\d+(?:\.\d+)?(?:B|KB|MB|GB) limit reached))*\]$/;
-	const entries = lines.filter((line) => !noticePattern.test(line));
-	const notices = lines.filter((line) => noticePattern.test(line));
+	const entries = lines.filter((line) => !isLsNotice(line));
+	const notices = lines.filter(isLsNotice);
 	if (!entries.length) return notices.map((notice) => `${FG_DIM}${notice}${RST}`).join("\n");
 
 	const out: string[] = [];

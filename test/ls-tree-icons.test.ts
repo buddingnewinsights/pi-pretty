@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { registerLsTool } from "../src/tools/ls.js";
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping SGR sequences
 const strip = (t: string) => t.replace(/\x1b\[[0-9;]*m/g, "");
@@ -62,5 +63,18 @@ describe("renderTree file icons", () => {
 		const icon = strip(fileIcon("[notes]")).trim();
 		const out = strip(renderTree("[notes]", "/p"));
 		expect(out).toBe(`└── ${icon} [notes]`);
+	});
+});
+
+describe("ls entry count", () => {
+	it("does not count SDK truncation notices as entries", async () => {
+		const tools = new Map<string, any>();
+		const text = "a.ts\nb/\n\n[500 entries limit reached. Use limit=1000 for more]";
+		registerLsTool({ registerTool: (t: any) => tools.set(t.name, t) } as any, "/p", null, {
+			execute: async () => ({ content: [{ type: "text", text }] }),
+			parameters: {},
+		} as any);
+		const result = await tools.get("ls").execute("tc", { path: "src" }, undefined, undefined, {});
+		expect(result.details.entryCount).toBe(2);
 	});
 });
