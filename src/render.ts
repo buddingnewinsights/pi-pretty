@@ -348,11 +348,16 @@ export function renderBashOutput(text: string, indent = TOOL_RESULT_INDENT): str
 // ---------------------------------------------------------------------------
 
 export function renderTree(text: string, _basePath: string): string {
-	const lines = text.trim().split("\n").filter(Boolean).map((line) => line.trim());
+	const lines = text
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => line.trim());
 	if (!lines.length) return `${FG_DIM}(empty directory)${RST}`;
 
 	// Match the SDK's notice formats precisely; bracketed filenames remain entries.
-	const noticePattern = /^\[(?:\d+ entries limit reached\. Use limit=\d+ for more|\d+(?:\.\d+)?(?:B|KB|MB|GB) limit reached)(?:\. (?:\d+ entries limit reached\. Use limit=\d+ for more|\d+(?:\.\d+)?(?:B|KB|MB|GB) limit reached))*\]$/;
+	const noticePattern =
+		/^\[(?:\d+ entries limit reached\. Use limit=\d+ for more|\d+(?:\.\d+)?(?:B|KB|MB|GB) limit reached)(?:\. (?:\d+ entries limit reached\. Use limit=\d+ for more|\d+(?:\.\d+)?(?:B|KB|MB|GB) limit reached))*\]$/;
 	const entries = lines.filter((line) => !noticePattern.test(line));
 	const notices = lines.filter((line) => noticePattern.test(line));
 	if (!entries.length) return notices.map((notice) => `${FG_DIM}${notice}${RST}`).join("\n");

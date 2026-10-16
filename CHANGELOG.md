@@ -6,6 +6,7 @@
 
 - `toolStyle: "claudecode"`: expanding a collapsed `read`, `bash`, `find`, `grep`, or `ls` result no longer falls back to the host's plain-text renderer. The original renderer is now handed only its own previous component, never a collapsed row, so syntax highlighting and line-number gutters are kept ([#14](https://github.com/heyhuynhgiabuu/pi-pretty/issues/14)).
 - Windows: `pi-pretty.json`, `settings.json` and the FFF data directory are now found when `HOME` is unset. The default agent directory falls back to `os.homedir()` instead of silently ignoring the config ([#16](https://github.com/heyhuynhgiabuu/pi-pretty/issues/16)).
+- `ls` tree view now shows a per-type Nerd Font icon for files (directories keep the folder icon), and keeps the SDK's `[N entries limit reached…]` notices below the tree instead of rendering them as entries ([#15](https://github.com/heyhuynhgiabuu/pi-pretty/pull/15), thanks @october2823).
 
 ### Maintenance
 
