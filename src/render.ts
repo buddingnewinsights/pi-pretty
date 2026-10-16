@@ -23,6 +23,7 @@ import {
 	FG_LNUM,
 	FG_RULE,
 	FG_YELLOW,
+	fileIcon,
 	loadConfig,
 	MAX_HL_CHARS,
 	MAX_PREVIEW_LINES,
@@ -347,31 +348,37 @@ export function renderBashOutput(text: string, indent = TOOL_RESULT_INDENT): str
 // ---------------------------------------------------------------------------
 
 export function renderTree(text: string, _basePath: string): string {
-	const lines = text.trim().split("\n").filter(Boolean);
+	const lines = text.trim().split("\n").filter(Boolean).map((line) => line.trim());
 	if (!lines.length) return `${FG_DIM}(empty directory)${RST}`;
 
+	// Match the SDK's notice formats precisely; bracketed filenames remain entries.
+	const noticePattern = /^\[(?:\d+ entries limit reached\. Use limit=\d+ for more|\d+(?:\.\d+)?(?:B|KB|MB|GB) limit reached)(?:\. (?:\d+ entries limit reached\. Use limit=\d+ for more|\d+(?:\.\d+)?(?:B|KB|MB|GB) limit reached))*\]$/;
+	const entries = lines.filter((line) => !noticePattern.test(line));
+	const notices = lines.filter((line) => noticePattern.test(line));
+	if (!entries.length) return notices.map((notice) => `${FG_DIM}${notice}${RST}`).join("\n");
+
 	const out: string[] = [];
-	const total = lines.length;
-	const show = lines.slice(0, MAX_PREVIEW_LINES);
+	const total = entries.length;
+	const show = entries.slice(0, MAX_PREVIEW_LINES);
 
 	for (let i = 0; i < show.length; i++) {
-		const entry = show[i].trim();
+		const entry = show[i];
 		const isLast = i === show.length - 1 && total <= MAX_PREVIEW_LINES;
 		const prefix = isLast ? "└── " : "├── ";
 		const connector = `${FG_RULE}${prefix}${RST}`;
 		const isDir = entry.endsWith("/");
 		const name = isDir ? entry.slice(0, -1) : entry;
-		const icon = isDir ? dirIcon() : "";
+		const icon = isDir ? dirIcon() : fileIcon(name);
 		out.push(`${connector}${icon}${isDir ? `${FG_BLUE}\x1b[1m${name}${RST}` : name}`);
 	}
 
 	if (total > MAX_PREVIEW_LINES) {
 		out.push(`${FG_RULE}└── ${RST}${FG_DIM}… ${total - MAX_PREVIEW_LINES} more entries${RST}`);
 	}
+	for (const notice of notices) out.push(`${FG_DIM}${notice}${RST}`);
 
 	return out.join("\n");
 }
-
 // ---------------------------------------------------------------------------
 // Find — grouped file list (plain, no tree characters or icons)
 // ---------------------------------------------------------------------------
