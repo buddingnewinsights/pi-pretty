@@ -391,6 +391,23 @@ function claudeRenderers(name: string, label: string, original?: AnyFn, expanded
 	};
 }
 
+/** Where the delegated (expanded) renderer's own component is kept between renders. */
+const DELEGATE_COMPONENT = "__claudeDelegateComponent";
+
+/**
+ * A provider's result renderer reuses and mutates `ctx.lastComponent` (e.g. `setText`), so it must only
+ * ever be handed its own previous component, never one of this style's rows (a collapse/expand round trip).
+ */
+function isolateDelegate(original: AnyFn | undefined): AnyFn | undefined {
+	if (!original) return undefined;
+	return (result, options, theme, ctx) => {
+		const lastComponent = ctx.state[DELEGATE_COMPONENT];
+		const component = original(result, options, theme, { ...ctx, lastComponent });
+		ctx.state[DELEGATE_COMPONENT] = component;
+		return component;
+	};
+}
+
 /**
  * Wrap a tool definition so collapsed rows use the Claude Code look. Expanded
  * calls keep the call row but defer the result body to the original renderer.
@@ -399,7 +416,7 @@ export function withClaudeToolStyle<
 	T extends { name: string; label?: string; renderCall?: AnyFn; renderResult?: AnyFn },
 >(def: T): T {
 	styledToolNames.add(def.name);
-	return { ...def, ...claudeRenderers(def.name, def.label || def.name, def.renderResult) } as T;
+	return { ...def, ...claudeRenderers(def.name, def.label || def.name, isolateDelegate(def.renderResult)) } as T;
 }
 
 // ---------------------------------------------------------------------------
@@ -408,8 +425,6 @@ export function withClaudeToolStyle<
 
 const EXTERNAL_TOOLS = ["write", "edit", "apply_patch", "codemode", "recall"];
 const EXTERNAL_TOOL_ORIGINALS = Symbol.for("pi-pretty.claude-style.file-tool-originals");
-/** Where the delegated (expanded) renderer's own component is kept between renders. */
-const DELEGATE_COMPONENT = "__claudeDelegateComponent";
 
 type RendererLookup = "getCallRenderer" | "getResultRenderer" | "getRenderShell";
 type ComponentProto = Record<RendererLookup, AnyFn> & { [EXTERNAL_TOOL_ORIGINALS]?: Record<RendererLookup, AnyFn> };
@@ -457,17 +472,7 @@ export function installClaudeExternalToolRenderers(toolExecutionComponent: unkno
 		if (!isExternalTool(this)) return original;
 		// A tool with no result renderer of its own (recall) gets the host's plain text fallback when expanded.
 		if (!original && this.expanded) return undefined;
-		// A provider's renderer reuses and mutates `lastComponent`, so it must only ever be handed
-		// its own previous component, never one of this style's rows (a collapse/expand round trip).
-		const delegate: AnyFn | undefined = original
-			? (result, options, theme, ctx) => {
-					const lastComponent = ctx.state[DELEGATE_COMPONENT];
-					const component = original(result, options, theme, { ...ctx, lastComponent });
-					ctx.state[DELEGATE_COMPONENT] = component;
-					return component;
-				}
-			: undefined;
-		return claudeRenderers(this.toolName, labelOf(this), delegate).renderResult;
+		return claudeRenderers(this.toolName, labelOf(this), isolateDelegate(original)).renderResult;
 	};
 	// The shell is fixed when the component is built, and the style draws its own rows without a box.
 	proto.getRenderShell = function (this: any) {

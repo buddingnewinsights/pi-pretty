@@ -48,6 +48,36 @@ describe("claudecode tool style", () => {
 		expect(result.render(80)).toEqual(["FULL"]);
 	});
 
+	it("expands a locally registered tool after a collapse without handing its renderer a style row", () => {
+		// Like pi-pretty's read/bash/find/ls renderers: reuse lastComponent as a mutable Text.
+		const textTool = withClaudeToolStyle({
+			name: "read",
+			label: "Read",
+			renderResult: (_r: unknown, _o: unknown, _t: unknown, ctx: any) => {
+				const text = ctx.lastComponent ?? {
+					lines: [] as string[],
+					setText(v: string) {
+						this.lines = [v];
+					},
+					render() {
+						return this.lines;
+					},
+				};
+				text.setText("FULL");
+				return text;
+			},
+		});
+		const state: Record<string, unknown> = {};
+		const run = (expanded: boolean, lastComponent?: unknown) =>
+			textTool.renderResult({ content: [] }, { expanded }, theme, { state, expanded, lastComponent } as any);
+
+		const first = run(true);
+		const collapsed = run(false, first);
+		const again = run(true, collapsed);
+		expect(again).toBe(first);
+		expect(again.render(80)).toEqual(["FULL"]);
+	});
+
 	it("folds consecutive tool calls into a Done group", () => {
 		setClaudeStyleTheme(theme);
 		const tool = (id: string) => ({
