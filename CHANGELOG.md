@@ -5,6 +5,7 @@
 ### Fixed
 
 - `toolStyle: "claudecode"`: expanding a collapsed `read`, `bash`, `find`, `grep`, or `ls` result no longer falls back to the host's plain-text renderer. The original renderer is now handed only its own previous component, never a collapsed row, so syntax highlighting and line-number gutters are kept ([#14](https://github.com/heyhuynhgiabuu/pi-pretty/issues/14)).
+- Windows: `pi-pretty.json`, `settings.json` and the FFF data directory are now found when `HOME` is unset. The default agent directory falls back to `os.homedir()` instead of silently ignoring the config ([#16](https://github.com/heyhuynhgiabuu/pi-pretty/issues/16)).
 
 ### Maintenance
 

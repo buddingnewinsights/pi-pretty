@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -103,11 +103,26 @@ describe("loadConfig", () => {
 		expect(loadConfig(makeConfigDir("{not json"))).toEqual({});
 	});
 
-	it("returns {} without a config directory", async () => {
-		vi.stubEnv("HOME", "");
+	it("returns {} when the config directory override is empty", async () => {
 		vi.stubEnv("PRETTY_CONFIG_DIR", "");
 		const { loadConfig } = await freshModule<typeof import("../src/config.js")>("../src/config.js");
 		expect(loadConfig()).toEqual({});
+	});
+
+	it("reads ~/.pi/agent from os.homedir() when HOME is unset (Windows)", async () => {
+		const home = makeEmptyDir();
+		mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+		writeFileSync(join(home, ".pi", "agent", "pi-pretty.json"), JSON.stringify({ enableTools: ["ls"] }));
+		vi.stubEnv("HOME", "");
+		vi.stubEnv("PRETTY_CONFIG_DIR", undefined);
+		vi.doMock("node:os", async (importOriginal) => ({
+			...(await importOriginal<typeof import("node:os")>()),
+			homedir: () => home,
+		}));
+		const config = await freshModule<typeof import("../src/config.js")>("../src/config.js");
+		vi.doUnmock("node:os");
+		expect(config.getDefaultAgentDir()).toBe(join(home, ".pi", "agent"));
+		expect(config.loadConfig()).toEqual({ enableTools: ["ls"] });
 	});
 });
 

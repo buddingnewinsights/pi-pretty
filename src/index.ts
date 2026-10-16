@@ -253,9 +253,7 @@ export default async function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrett
 	/** pi persists the thinking-visibility toggle as a top-level settings key. */
 	const thinkingHidden = (): boolean => {
 		try {
-			const dir = getDefaultAgentDir();
-			if (!dir) return false;
-			const parsed = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")) as {
+			const parsed = JSON.parse(readFileSync(join(getDefaultAgentDir(), "settings.json"), "utf8")) as {
 				hideThinkingBlock?: unknown;
 			};
 			return parsed.hideThinkingBlock === true;

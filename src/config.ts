@@ -3,6 +3,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, extname, join } from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -206,7 +207,7 @@ export function loadConfig(agentDir = getConfigDir()): PrettyConfig {
 	}
 }
 
-export function getConfigDir(): string | undefined {
+export function getConfigDir(): string {
 	return process.env.PRETTY_CONFIG_DIR ?? getDefaultAgentDir();
 }
 
@@ -465,7 +466,7 @@ export function applyConfig(config: PrettyConfig): void {
 // Agent directory helpers
 // ---------------------------------------------------------------------------
 
-export function getDefaultAgentDir(): string | undefined {
-	const home = process.env.HOME ?? "";
-	return home ? join(home, ".pi/agent") : undefined;
+/** `HOME` is unset on Windows, where `os.homedir()` resolves `USERPROFILE`. */
+export function getDefaultAgentDir(): string {
+	return join(process.env.HOME || homedir(), ".pi/agent");
 }
