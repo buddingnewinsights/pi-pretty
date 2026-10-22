@@ -176,6 +176,7 @@ Place a JSON file alongside Pi's `settings.json` to customize pi-pretty. Every o
 | `fff.enableHomeScanning` | boolean | `PRETTY_FFF_HOME_SCAN` (`1`/`0`) | `false` |
 | `fff.enableRootScanning` | boolean | `PRETTY_FFF_ROOT_SCAN` (`1`/`0`) | `false` |
 | `toolStyle` | `default` \| `claudecode` | — | `default` |
+| `userRail` | `#rrggbb`; draws a one-cell tinted bar left of user messages instead of a full-width background, so translucent/acrylic terminals keep their blur | — | unset (disabled) |
 | `workingIndicator.enabled` | boolean | `PRETTY_WORKING_INDICATOR` (`on`/`off`) | `true` |
 | `workingIndicator.text` | string or string[] (phrases rotated per sweep; env accepts comma-separated) | `PRETTY_WORKING_INDICATOR_TEXT` | `["Working…"]` |
 | `workingIndicator.mode` | `shimmer` \| `kitt` \| `static` | `PRETTY_WORKING_INDICATOR_MODE` | `shimmer` |
@@ -185,7 +186,9 @@ Place a JSON file alongside Pi's `settings.json` to customize pi-pretty. Every o
 | `workingIndicator.bold` | boolean | — | `true` |
 | `workingIndicator.hint` | boolean | — | deprecated (ignored) |
 | `workingIndicator.sessionAccent` | boolean | — | `true` |
+| `workingIndicator.intervalMs` | integer ms, clamped to `>= 33`; higher renders fewer frames | `PRETTY_WORKING_INTERVAL_MS` | `33` (30 fps) |
 | `thinkingIndicator.enabled` | boolean | `PRETTY_THINKING_INDICATOR` (`on`/`off`) | `true` |
+| `thinkingIndicator.intervalMs` | integer ms, clamped to `>= 33`; higher renders fewer frames | `PRETTY_THINKING_INTERVAL_MS` | `33` (30 fps) |
 
 - Config values take priority over theme-provided backgrounds (`toolBg` / `toolErrorBg`).
 - Precedence for FFF scan scope is CLI flag > environment variable > `pi-pretty.json` > safe default (`false`).

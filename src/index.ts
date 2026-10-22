@@ -45,6 +45,7 @@ import { registerGrepTool } from "./tools/grep.js";
 import { registerLsTool } from "./tools/ls.js";
 import { registerReadTool } from "./tools/read.js";
 import type { PiPrettyDeps, SdkTools } from "./types.js";
+import { installUserRail, setUserRail } from "./user-rail.js";
 import {
 	createThinkingLabelAnimator,
 	createThinkingTimer,
@@ -314,6 +315,8 @@ export default async function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrett
 			installClaudeChatGrouping(claudeStyle);
 			installClaudeExternalToolRenderers(hostSdk.ToolExecutionComponent, claudeStyle);
 			installPromptEditor(ctx);
+			setUserRail(loadConfig().userRail);
+			installUserRail((hostSdk as unknown as { UserMessageComponent?: unknown }).UserMessageComponent);
 			ctx.ui.setToolsExpanded(false);
 			// Per-row hidden-thinking labels: intercept the host's label fan-out so
 			// each row keeps its own duration. Falls back to the global-label
@@ -470,7 +473,7 @@ export default async function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrett
 					stopThinkingShimmer();
 					notifyThinkingFailure(ctx, error);
 				}
-			}, WORKING_INTERVAL_MS);
+			}, thinkingSettings.intervalMs ?? WORKING_INTERVAL_MS);
 		} catch (error: unknown) {
 			stopThinkingShimmer();
 			notifyThinkingFailure(ctx, error);

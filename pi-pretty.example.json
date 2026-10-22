@@ -6,6 +6,7 @@
 	"theme": "github-dark",
 	"icons": "nerd",
 	"toolStyle": "default",
+	"userRail": "#3a3a4a",
 	"enableTools": [
 		"ls"
 	],
@@ -29,9 +30,11 @@
 		"mid": "muted",
 		"high": "accent",
 		"bold": true,
-		"sessionAccent": true
+		"sessionAccent": true,
+		"intervalMs": 33
 	},
 	"thinkingIndicator": {
-		"enabled": true
+		"enabled": true,
+		"intervalMs": 33
 	}
 }
