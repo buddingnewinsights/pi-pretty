@@ -666,6 +666,11 @@ interface GroupCacheState {
 	 * it with fresh components on fork, `/tree` navigation and reload; a different first child
 	 * object therefore means the transcript was rebuilt and no cached rows are reusable. */
 	firstChild: unknown;
+	/** Theme the cached rows were rendered with; a switch invalidates every palette-dependent row. */
+	theme: number;
+	/** Width the cached rows were rendered at. Rows are width-dependent, and keying on width instead
+	 * of resetting would let stale widths fill the cap and lock out the current one. */
+	width: number | undefined;
 }
 
 /** Per-container: two containers can hold different components with identical toolCallIds
@@ -679,15 +684,15 @@ const GROUP_RENDER_CACHE_MAX = 4096;
 function groupCacheState(container: object): GroupCacheState {
 	let state = GROUP_RENDER_CACHE.get(container);
 	if (!state) {
-		state = { store: new Map(), firstChild: undefined };
+		state = { store: new Map(), firstChild: undefined, theme: themeGeneration, width: undefined };
 		GROUP_RENDER_CACHE.set(container, state);
 	}
 	return state;
 }
 
-/** Buckets entries; `isSameGroup` is what actually proves a hit. */
-const groupCacheKey = (members: AnyComponent[], width: number): string =>
-	`${themeGeneration}|${width}|${members.length}|${members[0]?.toolCallId ?? ""}|${members[members.length - 1]?.toolCallId ?? ""}`;
+/** Buckets entries within one theme+width epoch; `isSameGroup` is what actually proves a hit. */
+const groupCacheKey = (members: AnyComponent[]): string =>
+	`${members.length}|${members[0]?.toolCallId ?? ""}|${members[members.length - 1]?.toolCallId ?? ""}`;
 
 /**
  * A hit needs the same member components *and* the same result state per tool. Ids are not enough —
@@ -707,8 +712,18 @@ function renderGrouped(container: any, width: number): string[] {
 	const children: any[] = container.children;
 	const state = groupCacheState(container);
 	// Appending keeps the first child; a rebuild replaces it with a fresh component.
-	if (state.firstChild !== undefined && children[0] !== state.firstChild) state.store.clear();
+	// A theme switch or resize invalidates every cached row, so drop the store instead of
+	// letting dead epochs occupy the cap and lock out the current one.
+	if (
+		(state.firstChild !== undefined && children[0] !== state.firstChild) ||
+		state.theme !== themeGeneration ||
+		state.width !== width
+	) {
+		state.store.clear();
+	}
 	state.firstChild = children[0];
+	state.theme = themeGeneration;
+	state.width = width;
 	const lines: string[] = [];
 	const layout: Array<{ component: AnyComponent; height: number }> = [];
 	const push = (component: AnyComponent, rendered: string[]): void => {
@@ -744,7 +759,7 @@ function renderGrouped(container: any, width: number): string[] {
 			}
 		} else {
 			const running = tools.some((tool) => isRunning(tool));
-			const key = groupCacheKey(members, width);
+			const key = groupCacheKey(members);
 			const cached = running ? undefined : state.store.get(key);
 			if (cached && isSameGroup(cached, members, tools)) {
 				push(cached.component, cached.rendered);

@@ -474,6 +474,27 @@ describe("settled group cache", () => {
 		expect(before).toContain("[A:✓]");
 		expect(after).toContain("[B:✓]");
 	});
+
+	it("keeps caching after a resize instead of filling the cap with stale widths", () => {
+		setClaudeStyleTheme(theme);
+		setClaudeStyleAgentActive(false);
+		installClaudeChatGrouping(true);
+		const counter = { renders: 0 };
+		const container = new Container();
+		// Enough groups that width-keyed entries would fill the 4096-entry cap: 600 groups x 7 widths.
+		for (let group = 0; group < 600; group++) {
+			container.addChild({ render: () => [`msg ${group}`] } as never);
+			container.addChild(counted(`g${group}a`, counter) as never);
+			container.addChild(counted(`g${group}b`, counter) as never);
+		}
+		for (let width = 80; width < 86; width++) container.render(width);
+		// A resize must not leave the cache full of old widths, or nothing can be cached at the new one.
+		container.render(86);
+		counter.renders = 0;
+		container.render(86);
+		installClaudeChatGrouping(false);
+		expect(counter.renders).toBe(0);
+	});
 });
 
 describe("restored dangling tool calls", () => {
