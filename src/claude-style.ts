@@ -32,9 +32,12 @@ const PLAIN_THEME: ThemeLike = { fg: (_color, text) => text, bold: (text) => tex
 
 // Theme for group rows, which are built outside any tool's render context.
 let groupTheme: ThemeLike = PLAIN_THEME;
+/** Bumped on every theme swap so cached group rows (baked ANSI) are discarded. */
+let themeGeneration = 0;
 
 export function setClaudeStyleTheme(theme: unknown): void {
 	groupTheme = theme as ThemeLike;
+	themeGeneration++;
 }
 
 // ---------------------------------------------------------------------------
@@ -49,6 +52,8 @@ const spinnerFrame = (): string => SPINNER_FRAMES[Math.floor(Date.now() / SPINNE
 const ICON_SUCCESS = "✓";
 const ICON_ERROR = "✗";
 const ICON_PENDING = "·";
+/** A call whose result will never arrive, so it is neither running, pending nor done. */
+const ICON_INTERRUPTED = "⊘";
 
 type ToolState = "pending" | "running" | "success" | "error";
 
@@ -69,6 +74,18 @@ function stateIcon(theme: ThemeLike, state: ToolState): string {
 function toggleHint(theme: ThemeLike, verb: "expand" | "collapse"): string {
 	const key = keyText("app.tools.expand");
 	return key ? ` ${theme.fg("dim", `(${key} to ${verb})`)}` : "";
+}
+
+const ESC = String.fromCharCode(27);
+/** Indent and SGR prefix a collapsed row starts with, followed by its state icon (the icon carries
+ * its own color, so spaces and escapes interleave in any order). */
+const ROW_PREFIX = `(?:[ \\t]|${ESC}\\[[0-9;]*m)*`;
+const STEP_ICONS = [ICON_SUCCESS, ICON_ERROR, ICON_PENDING, ICON_INTERRUPTED, ...SPINNER_FRAMES].join("");
+const ROW_ICON_RE = new RegExp(`^(${ROW_PREFIX})(?:[${STEP_ICONS}])`);
+
+/** Swap a row's state icon for the interrupted glyph — the row itself cannot know it was restored. */
+function markInterruptedRow(line: string): string {
+	return line.replace(ROW_ICON_RE, `$1${fg("error", ICON_INTERRUPTED)}`);
 }
 
 function indentOf(ctx: RenderCtxLike): string {
@@ -526,7 +543,36 @@ const hasThought = (component: any): boolean =>
 		),
 	);
 
-const isRunning = (tool: any): boolean => !tool.result || Boolean(tool.isPartial);
+/** Whether the host agent is between agent_start and agent_end. A restored session can
+ * contain tool calls whose result never arrived (pi killed mid-run): without this flag
+ * their group summary froze on a single spinner frame — "Running" that only shifted
+ * when a scroll forced a redraw. */
+let agentActive = false;
+
+/** Tool components observed result-less while the agent was idle: restored dangling calls from a
+ * killed run. Recorded once, they stay "interrupted" even when a later agent run flips
+ * agentActive back on (their result will never arrive). Keyed by component, so a rebuilt
+ * transcript (same toolCallIds, fresh components) starts without stale marks. */
+let interruptedTools = new WeakSet<object>();
+
+export function setClaudeStyleAgentActive(active: boolean): void {
+	agentActive = active;
+}
+
+/** Drop per-session state on teardown: a reload/resume can leave a stale `agentActive` (and the
+ * matching interrupted marks) behind, which would suppress every later "Running" summary. */
+export function resetClaudeStyleSessionState(): void {
+	agentActive = false;
+	interruptedTools = new WeakSet<object>();
+}
+
+/** A call whose result will never arrive: marked while idle, or never resolved at all. */
+const isInterrupted = (tool: any): boolean => interruptedTools.has(tool) || (!tool.result && !agentActive);
+
+/** Live only while the host is actually running the agent; restored result-less calls
+ * are reported as interrupted instead of reading as perpetually "Running". */
+const isRunning = (tool: any): boolean =>
+	agentActive && !isInterrupted(tool) && (!tool.result || Boolean(tool.isPartial));
 
 function toolLabel(tool: any): string {
 	const label = tool.toolDefinition?.label;
@@ -537,10 +583,12 @@ function summaryRow(members: any[], width: number): string[] {
 	const tools = members.filter(isToolComponent);
 	const running = tools.filter(isRunning);
 	const failed = tools.filter((tool) => Boolean(tool.result?.isError)).length;
+	const interrupted = tools.filter((tool) => !tool.result && isInterrupted(tool)).length;
 	const thoughts = members.filter(hasThought).length;
 	const parts = [fg("muted", plural(tools.length, "tool call"))];
 	if (thoughts > 0) parts.push(fg("muted", plural(thoughts, "thought")));
 	if (failed > 0) parts.push(fg("error", `${failed} failed`));
+	if (interrupted > 0) parts.push(fg("error", `${plural(interrupted, "call")} interrupted`));
 	if (running.length > 0) parts.push(fg("muted", toolLabel(running[running.length - 1])));
 	const icon = stateIcon(groupTheme, running.length > 0 ? "running" : failed > 0 ? "error" : "success");
 	const state = bold(fg("text", running.length > 0 ? "Running" : "Done"));
@@ -569,6 +617,7 @@ function treeRows(members: any[], width: number): { lines: string[]; owners: any
 			// A settled success shrinks to a small dot; errors, spinners and pending markers stay as they are.
 			if (lineIndex === 0 && stripAnsi(line).trimStart().startsWith(ICON_SUCCESS))
 				content = line.replace(ICON_SUCCESS, "•");
+			if (lineIndex === 0 && isInterrupted(member)) content = markInterruptedRow(content);
 			const row = `  ${fg("dim", guide)}${content.replace(LEADING_SPACE_RE, "$1")}`;
 			lines.push(visibleWidth(row) > width ? truncateToWidth(row, width, "") : row);
 			owners.push(member);
@@ -595,8 +644,71 @@ function groupComponent(owners: any[]): AnyComponent {
 	};
 }
 
+// Settled groups rebuild identical strings on every host render — once a
+// session is long, that is O(history) work per frame (pi-tui re-renders the
+// whole tree on every doRender, and requestRender ticks ~30x/s while
+// streaming). Cache each settled group's rows keyed by its member span;
+// groups with running tools re-render every frame (spinner/summary are live).
+interface CachedGroupRender {
+	component: AnyComponent;
+	/** The exact members these rows were built from. */
+	members: AnyComponent[];
+	/** `tool.result` identity and partial flag per tool member: a result that lands in place must
+	 * invalidate the row even though the component object is unchanged. */
+	results: unknown[];
+	partials: boolean[];
+	rendered: string[];
+}
+
+interface GroupCacheState {
+	store: Map<string, CachedGroupRender>;
+	/** First child of the previous render. The host tears a container down with `clear()` and refills
+	 * it with fresh components on fork, `/tree` navigation and reload; a different first child
+	 * object therefore means the transcript was rebuilt and no cached rows are reusable. */
+	firstChild: unknown;
+}
+
+/** Per-container: two containers can hold different components with identical toolCallIds
+ * (rebuilds, forked sessions) — sharing rows between them would point mouse owners at dead
+ * components. */
+const GROUP_RENDER_CACHE = new WeakMap<object, GroupCacheState>();
+/** Memory bound only: a rendered copy of every settled group is roughly one transcript. A group
+ * past the cap stays uncached (the pre-cache behavior) rather than evicting a warm entry. */
+const GROUP_RENDER_CACHE_MAX = 4096;
+
+function groupCacheState(container: object): GroupCacheState {
+	let state = GROUP_RENDER_CACHE.get(container);
+	if (!state) {
+		state = { store: new Map(), firstChild: undefined };
+		GROUP_RENDER_CACHE.set(container, state);
+	}
+	return state;
+}
+
+/** Buckets entries; `isSameGroup` is what actually proves a hit. */
+const groupCacheKey = (members: AnyComponent[], width: number): string =>
+	`${themeGeneration}|${width}|${members.length}|${members[0]?.toolCallId ?? ""}|${members[members.length - 1]?.toolCallId ?? ""}`;
+
+/**
+ * A hit needs the same member components *and* the same result state per tool. Ids are not enough —
+ * a rebuilt transcript reuses toolCallIds (stale rows would keep dead mouse owners) — and neither is
+ * member identity, because a result that lands in place mutates the member instead of replacing it.
+ */
+function isSameGroup(entry: CachedGroupRender, members: AnyComponent[], tools: AnyComponent[]): boolean {
+	if (entry.members.length !== members.length || entry.results.length !== tools.length) return false;
+	for (let i = 0; i < members.length; i++) if (entry.members[i] !== members[i]) return false;
+	for (let i = 0; i < tools.length; i++) {
+		if (entry.results[i] !== tools[i].result || entry.partials[i] !== Boolean(tools[i].isPartial)) return false;
+	}
+	return true;
+}
+
 function renderGrouped(container: any, width: number): string[] {
 	const children: any[] = container.children;
+	const state = groupCacheState(container);
+	// Appending keeps the first child; a rebuild replaces it with a fresh component.
+	if (state.firstChild !== undefined && children[0] !== state.firstChild) state.store.clear();
+	state.firstChild = children[0];
 	const lines: string[] = [];
 	const layout: Array<{ component: AnyComponent; height: number }> = [];
 	const push = (component: AnyComponent, rendered: string[]): void => {
@@ -614,13 +726,45 @@ function renderGrouped(container: any, width: number): string[] {
 		}
 		const members = children.slice(index, end);
 		const tools = members.filter(isToolComponent);
+		// While idle, any result-less styled tool is a restored dangling call — mark it once.
+		if (!agentActive) {
+			for (const tool of tools) if (!tool.result) interruptedTools.add(tool);
+		}
 		if (tools.length < MIN_GROUPED_TOOLS || tools.some((tool) => tool.expanded)) {
-			for (const member of members) push(member, member.render(width));
+			for (const member of members) {
+				const rendered = member.render(width);
+				// A group has no summary to say "interrupted", so the lone row says it itself.
+				const first = rendered.findIndex((line: string) => stripAnsi(line).trim() !== "");
+				push(
+					member,
+					isToolComponent(member) && first >= 0 && isInterrupted(member)
+						? rendered.map((line: string, i: number) => (i === first ? markInterruptedRow(line) : line))
+						: rendered,
+				);
+			}
 		} else {
-			const summary = summaryRow(members, width);
-			const tree = treeRows(members, width);
-			const owners = [...summary.map(() => undefined), ...tree.owners];
-			push(groupComponent(owners), [...summary, ...tree.lines]);
+			const running = tools.some((tool) => isRunning(tool));
+			const key = groupCacheKey(members, width);
+			const cached = running ? undefined : state.store.get(key);
+			if (cached && isSameGroup(cached, members, tools)) {
+				push(cached.component, cached.rendered);
+			} else {
+				const summary = summaryRow(members, width);
+				const tree = treeRows(members, width);
+				const owners = [...summary.map(() => undefined), ...tree.owners];
+				const component = groupComponent(owners);
+				const rendered = [...summary, ...tree.lines];
+				push(component, rendered);
+				if (!running && state.store.size < GROUP_RENDER_CACHE_MAX) {
+					state.store.set(key, {
+						component,
+						members: [...members],
+						results: tools.map((tool) => tool.result),
+						partials: tools.map((tool) => Boolean(tool.isPartial)),
+						rendered,
+					});
+				}
+			}
 		}
 		index = end;
 	}

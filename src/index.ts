@@ -24,6 +24,8 @@ import { createFffAutocompleteProvider } from "./autocomplete.js";
 import {
 	installClaudeChatGrouping,
 	installClaudeExternalToolRenderers,
+	resetClaudeStyleSessionState,
+	setClaudeStyleAgentActive,
 	setClaudeStyleTheme,
 	withClaudeToolStyleApi,
 } from "./claude-style.js";
@@ -369,11 +371,13 @@ export default async function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrett
 	pi.on("agent_start", async (_event: unknown, ctx: ExtensionContext) => {
 		if (ctx.mode !== "tui") return;
 		workingStreaming = true;
+		setClaudeStyleAgentActive(true);
 		workingController?.start();
 	});
 	const stopStreaming = async (_event: unknown, ctx: ExtensionContext): Promise<void> => {
 		if (ctx.mode !== "tui") return;
 		workingStreaming = false;
+		setClaudeStyleAgentActive(false);
 		workingController?.stop();
 		stopThinkingShimmer();
 	};
@@ -522,6 +526,7 @@ export default async function piPrettyExtension(pi: ExtensionAPI, deps?: PiPrett
 		perRowLabels = undefined;
 		thinkingElapsedMs.clear();
 		workingStreaming = false;
+		resetClaudeStyleSessionState();
 		// Intentionally keep the native FFF finder on session shutdown.
 		// Pi can emit shutdown/start during resume or session switching while the
 		// process keeps running. Native teardown, or dropping the JS handle while the
