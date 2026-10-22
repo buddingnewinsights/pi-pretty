@@ -2,9 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- `workingIndicator.intervalMs` and `thinkingIndicator.intervalMs` (or `PRETTY_WORKING_INTERVAL_MS` / `PRETTY_THINKING_INTERVAL_MS`) tune how often the indicator animators request a full re-render. Both default to 33 ms and are clamped to that floor; raising them cuts render pressure on long sessions ([#18](https://github.com/heyhuynhgiabuu/pi-pretty/pull/18), thanks @october2823).
+- `userRail` draws a one-cell tinted bar beside user messages instead of a full-width background, so translucent and acrylic terminals keep their blur ([#18](https://github.com/heyhuynhgiabuu/pi-pretty/pull/18), thanks @october2823).
+
 ### Fixed
 
 - `ls` header entry count no longer includes the SDK's `[N entries limit reached…]` notice line.
+- `toolStyle: "claudecode"`: settled tool groups are cached by member identity rather than by key alone, so a rebuilt transcript (`/tree`, fork, reload) no longer serves rows whose mouse handlers point at dropped components. Interrupted calls are marked instead of showing a frozen `Running` spinner, and the cache no longer fills with stale widths after a resize ([#17](https://github.com/heyhuynhgiabuu/pi-pretty/pull/17), thanks @october2823).
 
 ## [0.7.1] - 2026-10-16
 
