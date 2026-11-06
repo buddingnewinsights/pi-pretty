@@ -14,7 +14,7 @@
 
 import { highlightCode, keyText } from "@earendil-works/pi-coding-agent";
 import { Container, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { BG_BASE, BG_ERROR, resolveBaseBackground } from "./config.js";
+import { getToolBackground, resolveBaseBackground } from "./config.js";
 import { ELAPSED_KEY, shortPath } from "./helpers.js";
 import { fillToolBackground, preserveBoxBackground } from "./render.js";
 import type { RenderCtxLike, ThemeLike } from "./types.js";
@@ -332,7 +332,7 @@ function buildCallRow(
 ): AnyComponent {
 	// Resolved once per render call, not per frame: it reads pi-pretty.json synchronously.
 	resolveBaseBackground(theme);
-	const bg = ctx.isError ? BG_ERROR : BG_BASE;
+	const bg = getToolBackground(ctx.isError);
 	return rowComponent((width) => {
 		const head = `${indentOf(ctx)}${stateIcon(theme, state)} ${theme.bold(theme.fg("toolTitle", label))}`;
 		const body = detail ? ` ${theme.fg("dim", "(")}${theme.fg("muted", detail)}${theme.fg("dim", ")")}` : "";

@@ -3,7 +3,7 @@
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { getReadmePath } from "@earendil-works/pi-coding-agent";
-import { BG_BASE, BG_ERROR, FG_DIM, FG_LNUM, FG_RULE, RST, resolveBaseBackground, termWidth } from "../config.js";
+import { FG_DIM, FG_LNUM, FG_RULE, getToolBackground, RST, resolveBaseBackground, termWidth } from "../config.js";
 import { normalizeLineEndings, shortPath } from "../helpers.js";
 import { fillToolBackground, fillToolBody, renderFileContent, renderToolError, toolIndent } from "../render.js";
 import { resolveTextCtor } from "../tui-text.js";
@@ -108,7 +108,14 @@ export function registerReadTool(
 			const ind = toolIndent(ctx);
 			const path = String(args.path ?? "");
 			const label = theme.fg("error", theme.bold("→ read"));
-			text.setText(fillToolBackground(`\n${ind}${label} ${theme.fg("toolTitle", path)}\n`, BG_ERROR, undefined, ind));
+			text.setText(
+				fillToolBackground(
+					`\n${ind}${label} ${theme.fg("toolTitle", path)}\n`,
+					getToolBackground(true),
+					undefined,
+					ind,
+				),
+			);
 			return text;
 		},
 
@@ -132,7 +139,7 @@ export function registerReadTool(
 			if (d?._type === "readImage") {
 				const note = getText(result);
 				// Keep fallback text visually separated from the preceding tool row.
-				text.setText(note ? fillToolBody(`\n${note}`, BG_BASE) : "");
+				text.setText(note ? fillToolBody(`\n${note}`, getToolBackground()) : "");
 				return text;
 			}
 
@@ -148,7 +155,7 @@ export function registerReadTool(
 				if (!ctx.expanded) {
 					if (skillName) {
 						const header = renderSkillHeader(skillName, false, theme);
-						text.setText(fillToolBody(`\n${ind}${header}\n`, BG_BASE, undefined, ind));
+						text.setText(fillToolBody(`\n${ind}${header}\n`, getToolBackground(), undefined, ind));
 						return text;
 					}
 					const docsLabel = getPiDocsLabel(filePath, cwd);
@@ -158,7 +165,7 @@ export function registerReadTool(
 					text.setText(
 						fillToolBody(
 							`\n${ind}${title}${theme.fg("dim", off2)} ${FG_DIM}${total} lines — ctrl+o to expand${RST}`,
-							BG_BASE,
+							getToolBackground(),
 							undefined,
 							ind,
 						),
@@ -186,7 +193,7 @@ export function registerReadTool(
 				const cachedHighlight = getCachedReadHighlight(ctx, highlightRequest);
 				if (cachedHighlight !== undefined) {
 					const highlighted = buildHighlightedRead(cachedHighlight, header, skillName, offset, nw, tw, ind);
-					text.setText(fillToolBody(highlighted, BG_BASE, undefined, ind));
+					text.setText(fillToolBody(highlighted, getToolBackground(), undefined, ind));
 					return text;
 				}
 
@@ -205,7 +212,7 @@ export function registerReadTool(
 					out.push(`${ind}${FG_DIM}… ${total - maxShow} more lines (${total} total)${RST}`);
 				}
 				const rendered = out.join("\n");
-				text.setText(fillToolBody(rendered, BG_BASE, undefined, ind));
+				text.setText(fillToolBody(rendered, getToolBackground(), undefined, ind));
 
 				// Async syntax highlighting via Shiki. The component is reused across
 				// expansion changes, so stale work must not restore an older view.
@@ -214,7 +221,7 @@ export function registerReadTool(
 						if (!isCurrentReadRender(ctx, renderToken)) return;
 						setCachedReadHighlight(ctx, highlightRequest, hl);
 						const highlighted = buildHighlightedRead(hl, header, skillName, offset, nw, tw, ind);
-						text.setText(fillToolBody(highlighted, BG_BASE, undefined, ind));
+						text.setText(fillToolBody(highlighted, getToolBackground(), undefined, ind));
 						ctx.invalidate?.();
 					})
 					.catch(() => {});
@@ -226,7 +233,7 @@ export function registerReadTool(
 			text.setText(
 				fillToolBody(
 					`${ind}${theme.fg("dim", fc && "text" in fc ? String(fc.text).slice(0, 120) : "done")}`,
-					BG_BASE,
+					getToolBackground(),
 					undefined,
 					ind,
 				),

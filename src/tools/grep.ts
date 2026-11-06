@@ -1,7 +1,7 @@
 /* pi-pretty: grep tool -- FFF-backed text search with SDK fallback. */
 
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { BG_ERROR, FG_DIM, RST, resolveBaseBackground } from "../config.js";
+import { FG_DIM, getToolBackground, RST, resolveBaseBackground } from "../config.js";
 import { fffFormatGrepText } from "../fff-helpers.js";
 import { normalizeLineEndings, shortPath } from "../helpers.js";
 import { NOTICE_PARTIAL_FILE_INDEX } from "../notices.js";
@@ -125,7 +125,7 @@ export function registerGrepTool(
 			if (caseInsensitive) out += theme.fg("dim", ` (case-insensitive)`);
 			const ind = toolIndent(ctx);
 			const renderTitle = (suffix = ""): string =>
-				fillToolBackground(`\n${ind}${out}${suffix}\n`, ctx.isError ? BG_ERROR : undefined, undefined, ind);
+				fillToolBackground(`\n${ind}${out}${suffix}\n`, getToolBackground(ctx.isError), undefined, ind);
 			rememberToolTitle(ctx, text, renderTitle);
 			text.setText(renderTitle());
 			return text;
@@ -154,7 +154,7 @@ export function registerGrepTool(
 				if (!ctx.expanded) {
 					const summary = `${FG_DIM}${lines.length} lines — ctrl+o to expand${RST}`;
 					if (setCollapsedToolTitle(ctx, text, ` ${summary}`)) return text;
-					text.setText(fillToolBody(`${ind}${summary}`, ctx.isError ? BG_ERROR : undefined, undefined, ind));
+					text.setText(fillToolBody(`${ind}${summary}`, getToolBackground(ctx.isError), undefined, ind));
 					return text;
 				}
 				const maxShow = lines.length;
@@ -169,14 +169,12 @@ export function registerGrepTool(
 					out.push(theme.fg("muted", `… (${remaining} more ${remaining === 1 ? "line" : "lines"}, to expand)`));
 				}
 				const body = out.map((l) => `${ind}${l}`).join("\n");
-				text.setText(fillToolBody(body, ctx.isError ? BG_ERROR : undefined, undefined, ind));
+				text.setText(fillToolBody(body, getToolBackground(ctx.isError), undefined, ind));
 				return text;
 			}
 			const fc = result.content?.[0];
 			const fallback = fc && "text" in fc ? String(fc.text).slice(0, 120) : "no matches";
-			text.setText(
-				fillToolBody(`${ind}${theme.fg("dim", fallback)}`, ctx.isError ? BG_ERROR : undefined, undefined, ind),
-			);
+			text.setText(fillToolBody(`${ind}${theme.fg("dim", fallback)}`, getToolBackground(ctx.isError), undefined, ind));
 			return text;
 		},
 	} as unknown as ToolDefinition<any, any, any>);
