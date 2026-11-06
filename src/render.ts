@@ -13,8 +13,6 @@ import { Text as TuiText, truncateToWidth } from "@earendil-works/pi-tui";
 import { codeToANSI } from "@shikijs/cli";
 import { type BundledLanguage, type BundledTheme, bundledThemes } from "shiki";
 import {
-	BG_BASE,
-	BG_ERROR,
 	CACHE_LIMIT,
 	detectLang,
 	dirIcon,
@@ -24,6 +22,7 @@ import {
 	FG_RULE,
 	FG_YELLOW,
 	fileIcon,
+	getToolBackground,
 	loadConfig,
 	MAX_HL_CHARS,
 	MAX_PREVIEW_LINES,
@@ -212,7 +211,12 @@ export function toolIndent(ctx?: Pick<RenderContext, "outputPad">): string {
 		: TOOL_RESULT_INDENT;
 }
 
-export function fillToolBackground(text: string, bg = BG_BASE, width?: number, indent = TOOL_RESULT_INDENT): string {
+export function fillToolBackground(
+	text: string,
+	bg = getToolBackground(),
+	width?: number,
+	indent = TOOL_RESULT_INDENT,
+): string {
 	return text
 		.split("\n")
 		.map((line) => {
@@ -231,7 +235,12 @@ export function fillToolBackground(text: string, bg = BG_BASE, width?: number, i
 }
 
 /** Add exactly the missing terminal row after a rendered tool body. */
-export function fillToolBody(text: string, bg = BG_BASE, width?: number, indent = TOOL_RESULT_INDENT): string {
+export function fillToolBody(
+	text: string,
+	bg = getToolBackground(),
+	width?: number,
+	indent = TOOL_RESULT_INDENT,
+): string {
 	return fillToolBackground(text.endsWith("\n") ? text : `${text}\n`, bg, width, indent);
 }
 
@@ -300,7 +309,7 @@ export function renderToolError(error: string, theme: ThemeLike, indent = TOOL_R
 	const body = compactErrorLines(error)
 		.map((line) => `${indent}${line ? theme.fg("error", line) : ""}`)
 		.join("\n");
-	return fillToolBody(body, BG_ERROR, undefined, indent);
+	return fillToolBody(body, getToolBackground(true), undefined, indent);
 }
 
 // ---------------------------------------------------------------------------
@@ -489,7 +498,7 @@ export function makeRenderCall(toolName: string) {
 	return (args: Record<string, unknown>, theme: ThemeLike, ctx: RenderContext) => {
 		resolveBaseBackground(theme);
 		const text = ctx.lastComponent ?? new TuiText("", 0, 0);
-		const bg = ctx.isError ? BG_ERROR : undefined;
+		const bg = getToolBackground(ctx.isError);
 		text.setText(fillToolBackground(`${theme.fg("toolTitle", theme.bold(toolName))}`, bg, undefined, toolIndent(ctx)));
 		return text;
 	};

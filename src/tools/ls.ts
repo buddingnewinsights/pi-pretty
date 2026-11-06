@@ -1,7 +1,7 @@
 /* pi-pretty: ls tool -- directory listing with styled output. */
 
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { BG_ERROR, FG_DIM, RST, resolveBaseBackground } from "../config.js";
+import { FG_DIM, getToolBackground, RST, resolveBaseBackground } from "../config.js";
 import { shortPath } from "../helpers.js";
 import {
 	fillToolBackground,
@@ -69,7 +69,7 @@ export function registerLsTool(
 			if (limit !== undefined && limit !== null) out += theme.fg("toolOutput", ` (limit ${limit})`);
 			const ind = toolIndent(ctx);
 			const renderTitle = (suffix = ""): string =>
-				fillToolBackground(`\n${ind}${out}${suffix}\n`, ctx.isError ? BG_ERROR : undefined, undefined, ind);
+				fillToolBackground(`\n${ind}${out}${suffix}\n`, getToolBackground(ctx.isError), undefined, ind);
 			rememberToolTitle(ctx, text, renderTitle);
 			text.setText(renderTitle());
 			return text;

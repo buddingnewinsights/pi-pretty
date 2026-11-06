@@ -2,7 +2,7 @@
 
 import { isAbsolute, relative } from "node:path";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { BG_ERROR, FG_DIM, RST, resolveBaseBackground } from "../config.js";
+import { FG_DIM, getToolBackground, RST, resolveBaseBackground } from "../config.js";
 import { isLikelyGlobPattern, normalizeFindGlobPattern } from "../find-glob.js";
 import { shortPath } from "../helpers.js";
 import { NOTICE_PARTIAL_FILE_INDEX } from "../notices.js";
@@ -174,7 +174,7 @@ export function registerFindTool(
 			const out = `${findLabel} ${patternPart}${inPart}${pathPart}${limitPart}`;
 			const ind = toolIndent(ctx);
 			const renderTitle = (suffix = ""): string =>
-				fillToolBackground(`\n${ind}${out}${suffix}\n`, ctx.isError ? BG_ERROR : undefined, undefined, ind);
+				fillToolBackground(`\n${ind}${out}${suffix}\n`, getToolBackground(ctx.isError), undefined, ind);
 			rememberToolTitle(ctx, text, renderTitle);
 			text.setText(renderTitle());
 			return text;

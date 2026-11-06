@@ -25,8 +25,13 @@ export const FG_BLUE = "\x1b[38;2;100;140;220m";
 export const FG_MUTED = "\x1b[38;2;139;148;158m";
 
 const BG_DEFAULT = "\x1b[49m";
-export let BG_BASE = BG_DEFAULT;
-export let BG_ERROR = BG_DEFAULT;
+let BG_BASE = BG_DEFAULT;
+let BG_ERROR = BG_DEFAULT;
+
+/** jiti caches imported property values; read mutable backgrounds through this function. */
+export function getToolBackground(isError = false): string {
+	return isError ? BG_ERROR : BG_BASE;
+}
 
 // ---------------------------------------------------------------------------
 // Theme
